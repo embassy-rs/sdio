@@ -424,6 +424,8 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
         // TODO: impl. loop timeouts
 
         // Get IO OCR
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        let mut i = 0;
         self.ocr = loop {
             match self
                 .bus
@@ -431,9 +433,16 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
                 .await
             {
                 Ok(r) => break Ok(r),
-                Err(MmcError::Timeout) => continue,
+                Err(MmcError::Timeout) => {}
                 Err(e) => break Err(e),
             }
+
+            if i > 750 {
+                return Err(MmcError::Timeout);
+            }
+
+            self.bus.delay.delay_ms(1).await;
+            i += 1;
         }?
         .into();
 

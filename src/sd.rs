@@ -878,6 +878,8 @@ impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Card, B, D, BLO
         // `false` here (`has_vswitch` is hard-coded false).
         let request_18v = self.bus.bus.supports_1v8();
 
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        let mut i = 0;
         self.info.ocr = loop {
             // 3.2-3.3V
             let voltage_window = 1 << 5;
@@ -895,7 +897,12 @@ impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Card, B, D, BLO
             if !ocr.is_busy() {
                 // Power up done
                 break ocr;
+            } else if i > 750 {
+                return Err(MmcError::Timeout);
             }
+
+            self.bus.delay.delay_ms(1).await;
+            i += 1;
         };
 
         self.info.card_type = if self.info.ocr.high_capacity() {

@@ -559,6 +559,8 @@ impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, D, BLO
 
         self.bus.send_command(common::idle(), false).await?;
 
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        let mut i = 0;
         let ocr = loop {
             let high_voltage = 0b0 << 7;
             let access_mode = 0b10 << 29;
@@ -572,7 +574,12 @@ impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, D, BLO
             if !ocr.is_busy() {
                 // Power up done
                 break ocr;
+            } else if i > 750 {
+                return Err(MmcError::Timeout);
             }
+
+            self.bus.delay.delay_ms(1).await;
+            i += 1;
         };
 
         self.info.capacity = if ocr.access_mode() == 0b10 {

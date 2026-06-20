@@ -540,8 +540,9 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
             return Ok(());
         }
 
-        // Wait for ready after R1b response
-        loop {
+        // Wait up to 750ms + cmd time for ready after R1b response
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        for _ in 0..750 {
             let status: CardStatus<()> = self
                 .bus
                 .send_command(common::card_status(self.rca, false))
@@ -549,9 +550,13 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
                 .into();
 
             if status.ready_for_data() {
-                break Ok(());
+                return Ok(());
             }
+
+            self.delay.delay_ms(1).await;
         }
+
+        Err(MmcError::Timeout)
     }
 
     /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
