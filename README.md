@@ -1,7 +1,117 @@
-# sdio-host
+# sdio
 
-Data structures for making sd data structures, such as, responses readable for humans and embedded Rust devices.
+A no-std library for interfacing with SD cards, EMMC, and/or SDIO cards, using the `MMCBus` trait. Current targeted
+support is stm32 and esp peripherals. Other chips can support SD/SDIO functionality by implementing this trait.
+
+A struct within this crate implements `block_device_driver::BlockDevice`, which allows no-std file systems to write
+cards that are attached to peripherals that implement `MMCBus`. Currently known file systems that implement support
+for this include [embedded-fatfs][1] and [exfat-slim][2].
+
+## An [embassy][3] project
+
+This crate is part of the embassy project, designed to improve cross-platform support for native SD/SDIO
+peripherals. It is also intended to be a replacement for the now-abandoned `sdio-host` project, with a standard
+implementation of common logic across all devices based on the SDIO standard.
+
+```rust
+/// ---------------------------------------------------------------------------
+/// MmcBus Trait
+/// ---------------------------------------------------------------------------
+///
+/// This is the lowest-level hardware abstraction for SD/MMC/SDIO host
+/// controllers. It corresponds to the Linux `mmc_host_ops` interface.
+///
+/// It exposes:
+///   • Command-only operations
+///   • Block-mode read/write
+///   • Byte-mode read/write
+///   • Bus configuration (clock, width)
+///
+/// Everything else (card initialization, SDIO function drivers, block devices)
+/// is built on top of this trait.
+///
+/// Methods should not return until DAT0 goes high if the associated reponse
+/// has `BUSY` set to `true`. Implementations may comply with this requirement
+/// by polling the card for status until an `Ok` result is received, or by awaiting
+/// DAT0 with hardware support.
+///
+pub trait MmcBus {
+    /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
+    fn send_command<'a, C>(
+        &'a mut self,
+        cmd: C,
+    ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
+    where
+        C: ControlCommand + 'a;
+
+    /// Read N blocks of fixed size (CMD17, CMD18, CMD53 block mode).
+    fn read_blocks<'a, C>(&mut self, cmd: C) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
+    where
+        C: BlockReadCommand + 'a;
+
+    /// Write N blocks of fixed size (CMD24, CMD25, CMD53 block mode).
+    fn write_blocks<'a, C>(
+        &mut self,
+        cmd: C,
+    ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
+    where
+        C: BlockWriteCommand + 'a;
+
+    /// Read an arbitrary number of bytes (CMD53 byte mode, SPI multi-byte).
+    fn read_bytes<'a, C>(&mut self, cmd: C) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
+    where
+        C: ByteReadCommand + 'a;
+
+    /// Write an arbitrary number of bytes (CMD53 byte mode, SPI multi-byte).
+    fn write_bytes<'a, C>(&mut self, cmd: C) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
+    where
+        C: ByteWriteCommand + 'a;
+
+    /// Initialize the bus in one-bit mode at 3.3v and the requested frequency.
+    ///
+    /// `hz` will always be `400_000`. The argument is provided so that the HAL does not have to define this.
+    fn init_idle(&mut self, hz: u32) -> impl Future<Output = Result<(), MmcError>>;
+
+    /// Configure bus width and frequency.
+    ///
+    /// Will not be called with a frequency higher than `supports_frequency()` or a bus width above
+    /// `supports_bus_width()`.
+    ///
+    /// If called above 25mhz, this function should configure the peripheral for high speed before returning.
+    fn set_bus(&mut self, width: BusWidth, hz: u32) -> impl Future<Output = Result<(), MmcError>>;
+
+    /// Switch to 1.8v; only called if `suppports_1v8()` returns true.
+    #[inline]
+    fn set_1v8(&mut self) -> impl Future<Output = Result<(), MmcError>> {
+        async { Err(MmcError::Unsupported) }
+    }
+
+    /// Optional: whether the host supports native MMC mode. Otherwise, SPI mode is used.
+    fn supports_mmc(&self) -> bool {
+        false
+    }
+
+    /// Optional: the maximum bus width available to the host
+    fn supports_bus_width(&self) -> BusWidth {
+        BusWidth::W1
+    }
+
+    /// Optional: whether the host supports 1.8v.
+    fn supports_1v8(&self) -> bool {
+        false
+    }
+
+    /// Optional: the maximum frequency supported by this bus. Defaults to 25Mhz
+    fn supports_frequency(&self) -> u32 {
+        25_000_000
+    }
+}
+```
 
 ## Resources
 
- - https://www.sdcard.org/downloads/pls/index.html
+- https://www.sdcard.org/downloads/pls/index.html
+
+[1]: https://github.com/MabezDev/embedded-fatfs
+[2]: https://github.com/ninjasource/exfat-slim
+[3]: https://github.com/embassy-rs/embassy

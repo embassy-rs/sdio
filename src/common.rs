@@ -1,5 +1,362 @@
-use core::fmt;
 use core::marker::PhantomData;
+use core::{fmt, mem, slice};
+
+use core::fmt::Debug;
+
+use aligned::{A4, Aligned};
+
+use crate::{
+    BlockCommand, BlockReadCommand, BlockWriteCommand, Command, ControlCommand, R1, R1b, R2, R3,
+    R4, R6,
+};
+
+// ============================================================================
+// COMMON COMMANDS
+// ============================================================================
+
+/// CMD0 — GO_IDLE_STATE
+pub struct Cmd0;
+
+impl Command for Cmd0 {
+    const INDEX: u8 = 0;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd0 {}
+
+/// CMD0 — GO_IDLE_STATE
+pub fn idle() -> Cmd0 {
+    Cmd0
+}
+
+/// CMD2 — ALL_SEND_CID
+pub struct Cmd2;
+impl Command for Cmd2 {
+    const INDEX: u8 = 2;
+    type Resp<'a> = R2;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd2 {}
+
+/// CMD2: Ask any card to send their CID
+pub fn all_send_cid() -> Cmd2 {
+    Cmd2
+}
+
+/// CMD7 — SELECT/DESELECT_CARD
+pub struct Cmd7 {
+    pub rca: u16,
+}
+impl Command for Cmd7 {
+    const INDEX: u8 = 7;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        (self.rca as u32) << 16
+    }
+}
+impl ControlCommand for Cmd7 {}
+
+/// CMD7: Select or deselect card
+pub fn select_card(rca: u16) -> Cmd7 {
+    Cmd7 { rca }
+}
+
+/// CMD9 — SEND_CSD
+pub struct Cmd9 {
+    pub rca: u16,
+}
+impl Command for Cmd9 {
+    const INDEX: u8 = 9;
+    type Resp<'a> = R2;
+    fn arg(&self) -> u32 {
+        (self.rca as u32) << 16
+    }
+}
+impl ControlCommand for Cmd9 {}
+
+/// CMD9: Send CSD
+pub fn send_csd(rca: u16) -> Cmd9 {
+    Cmd9 { rca }
+}
+
+/// CMD10 — SEND_CID
+pub struct Cmd10 {
+    pub rca: u16,
+}
+impl Command for Cmd10 {
+    const INDEX: u8 = 10;
+    type Resp<'a> = R2;
+    fn arg(&self) -> u32 {
+        (self.rca as u32) << 16
+    }
+}
+impl ControlCommand for Cmd10 {}
+
+/// CMD10: Send CID
+pub fn send_cid(rca: u16) -> Cmd10 {
+    Cmd10 { rca }
+}
+
+/// CMD12 — STOP_TRANSMISSION (R1b)
+pub struct Cmd12;
+impl Command for Cmd12 {
+    const INDEX: u8 = 12;
+    type Resp<'a> = R1b;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd12 {}
+
+/// CMD12: Stop transmission
+pub fn stop_transmission() -> Cmd12 {
+    Cmd12
+}
+
+/// CMD13 — SEND_STATUS
+pub struct Cmd13 {
+    pub rca: u16,
+    pub task_status: bool,
+}
+impl Command for Cmd13 {
+    const INDEX: u8 = 13;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        (self.rca as u32) << 16 | (self.task_status as u32) << 15
+    }
+}
+impl ControlCommand for Cmd13 {}
+
+/// CMD13: Ask card to send status or task status
+pub fn card_status(rca: u16, task_status: bool) -> Cmd13 {
+    Cmd13 { rca, task_status }
+}
+
+// /// CMD15: Sends card to inactive state
+// pub fn go_inactive_state(rca: u16) -> Cmd<Rz> {
+//     cmd(15, u32::from(rca) << 16)
+// }
+//
+
+/// CMD16 — SET_BLOCKLEN (rarely used on SDHC/SDXC)
+pub struct Cmd16 {
+    pub block_len: u32,
+}
+impl Command for Cmd16 {
+    const INDEX: u8 = 16;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        self.block_len
+    }
+}
+impl ControlCommand for Cmd16 {}
+
+/// CMD16: Set block len
+pub fn set_block_length(block_len: u32) -> Cmd16 {
+    Cmd16 { block_len }
+}
+
+/// CMD17 — READ_SINGLE_BLOCK
+pub struct Cmd17<'a, const BLOCK_SIZE: usize> {
+    pub addr: u32,
+    pub buf: &'a mut Aligned<A4, [u8; BLOCK_SIZE]>,
+}
+impl<'a, const BLOCK_SIZE: usize> Command for Cmd17<'a, BLOCK_SIZE> {
+    const INDEX: u8 = 17;
+    type Resp<'b>
+        = R1
+    where
+        Self: 'b;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockCommand for Cmd17<'a, BLOCK_SIZE> {
+    fn block_size(&self) -> u16 {
+        BLOCK_SIZE as u16
+    }
+    fn block_count(&self) -> u32 {
+        1
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockReadCommand for Cmd17<'a, BLOCK_SIZE> {
+    fn buf(&mut self) -> &mut Aligned<A4, [u8]> {
+        &mut *self.buf
+    }
+}
+
+/// CMD17: Read a single block from the card
+pub fn read_single_block<const BLOCK_SIZE: usize>(
+    addr: u32,
+    buf: &mut Aligned<A4, [u8; BLOCK_SIZE]>,
+) -> Cmd17<'_, BLOCK_SIZE> {
+    Cmd17 { addr, buf }
+}
+
+/// CMD18 — READ_MULTIPLE_BLOCK
+pub struct Cmd18<'a, const BLOCK_SIZE: usize> {
+    pub addr: u32,
+    pub buf: &'a mut [Aligned<A4, [u8; BLOCK_SIZE]>],
+}
+impl<'a, const BLOCK_SIZE: usize> Command for Cmd18<'a, BLOCK_SIZE> {
+    const INDEX: u8 = 18;
+    type Resp<'b>
+        = R1
+    where
+        Self: 'b;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockCommand for Cmd18<'a, BLOCK_SIZE> {
+    fn block_size(&self) -> u16 {
+        BLOCK_SIZE as u16
+    }
+
+    fn block_count(&self) -> u32 {
+        self.buf.len() as u32
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockReadCommand for Cmd18<'a, BLOCK_SIZE> {
+    fn buf(&mut self) -> &mut Aligned<A4, [u8]> {
+        unsafe {
+            mem::transmute(slice::from_raw_parts_mut(
+                self.buf.as_mut_ptr() as *mut _,
+                size_of_val(self.buf),
+            ))
+        }
+    }
+}
+
+/// CMD18: Read multiple block from the card
+pub fn read_multiple_blocks<const BLOCK_SIZE: usize>(
+    addr: u32,
+    buf: &mut [Aligned<A4, [u8; BLOCK_SIZE]>],
+) -> Cmd18<'_, BLOCK_SIZE> {
+    Cmd18 { addr, buf }
+}
+
+/// CMD24 — WRITE_BLOCK
+pub struct Cmd24<'a, const BLOCK_SIZE: usize> {
+    pub addr: u32,
+    pub buf: &'a Aligned<A4, [u8; BLOCK_SIZE]>,
+}
+impl<'a, const BLOCK_SIZE: usize> Command for Cmd24<'a, BLOCK_SIZE> {
+    const INDEX: u8 = 24;
+    type Resp<'b>
+        = R1b
+    where
+        Self: 'b;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockCommand for Cmd24<'a, BLOCK_SIZE> {
+    fn block_size(&self) -> u16 {
+        BLOCK_SIZE as u16
+    }
+    fn block_count(&self) -> u32 {
+        1
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockWriteCommand for Cmd24<'a, BLOCK_SIZE> {
+    fn buf(&self) -> &Aligned<A4, [u8]> {
+        self.buf
+    }
+}
+
+/// CMD24: Write block
+pub fn write_single_block<const BLOCK_SIZE: usize>(
+    addr: u32,
+    buf: &Aligned<A4, [u8; BLOCK_SIZE]>,
+) -> Cmd24<'_, BLOCK_SIZE> {
+    Cmd24 { addr, buf }
+}
+
+/// CMD25 — WRITE_MULTIPLE_BLOCK
+pub struct Cmd25<'a, const BLOCK_SIZE: usize> {
+    pub addr: u32,
+    pub buf: &'a [Aligned<A4, [u8; BLOCK_SIZE]>],
+}
+impl<'a, const BLOCK_SIZE: usize> Command for Cmd25<'a, BLOCK_SIZE> {
+    const INDEX: u8 = 25;
+    type Resp<'b>
+        = R1b
+    where
+        Self: 'b;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockCommand for Cmd25<'a, BLOCK_SIZE> {
+    fn block_size(&self) -> u16 {
+        BLOCK_SIZE as u16
+    }
+    fn block_count(&self) -> u32 {
+        self.buf.len() as u32
+    }
+}
+impl<'a, const BLOCK_SIZE: usize> BlockWriteCommand for Cmd25<'a, BLOCK_SIZE> {
+    fn buf(&self) -> &Aligned<A4, [u8]> {
+        unsafe {
+            mem::transmute(slice::from_raw_parts(
+                self.buf.as_ptr() as *const _,
+                size_of_val(self.buf),
+            ))
+        }
+    }
+}
+
+/// CMD25: Write multiple blocks
+pub fn write_multiple_blocks<const BLOCK_SIZE: usize>(
+    addr: u32,
+    buf: &[Aligned<A4, [u8; BLOCK_SIZE]>],
+) -> Cmd25<'_, BLOCK_SIZE> {
+    Cmd25 { addr, buf }
+}
+
+// /// CMD27: Program CSD
+// pub fn program_csd() -> Cmd<R1> {
+//     cmd(27, 0)
+// }
+
+/// CMD38 — ERASE (R1b)
+pub struct Cmd38;
+impl Command for Cmd38 {
+    const INDEX: u8 = 38;
+    type Resp<'a> = R1b;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd38 {}
+
+/// CMD38: Erase all previously selected write blocks
+pub fn erase() -> Cmd38 {
+    Cmd38
+}
+
+/// CMD55 — APP_CMD prefix
+pub struct Cmd55 {
+    pub rca: u16,
+}
+impl Command for Cmd55 {
+    const INDEX: u8 = 55;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        (self.rca as u32) << 16
+    }
+}
+impl ControlCommand for Cmd55 {}
+
+/// CMD55: App Command. Indicates that next command will be a app command
+pub fn app_cmd(rca: u16) -> Cmd55 {
+    Cmd55 { rca }
+}
 
 /// Types of SD Card
 #[derive(Debug, Copy, Clone)]
@@ -15,17 +372,6 @@ impl Default for CardCapacity {
     fn default() -> Self {
         CardCapacity::StandardCapacity
     }
-}
-
-/// The number of data lines in use on the SDMMC bus
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[allow(missing_docs)]
-pub enum BusWidth {
-    #[non_exhaustive]
-    Unknown,
-    One = 1,
-    Four = 4,
-    Eight = 8,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -170,9 +516,14 @@ impl fmt::Debug for CurrentConsumption {
 /// R3
 #[derive(Clone, Copy, Default)]
 pub struct OCR<Ext>(pub(crate) u32, PhantomData<Ext>);
-impl<Ext> From<u32> for OCR<Ext> {
-    fn from(word: u32) -> Self {
-        Self(word, PhantomData)
+impl<Ext> From<R3> for OCR<Ext> {
+    fn from(resp: R3) -> Self {
+        Self(resp.ocr, PhantomData)
+    }
+}
+impl<Ext> From<R4> for OCR<Ext> {
+    fn from(resp: R4) -> Self {
+        Self(resp.ocr, PhantomData)
     }
 }
 impl<Ext> OCR<Ext> {
@@ -187,30 +538,29 @@ impl<Ext> OCR<Ext> {
 /// R2
 #[derive(Clone, Copy, Default)]
 pub struct CID<Ext> {
-    pub(crate) inner: u128,
     pub(crate) bytes: [u8; 16],
     ext: PhantomData<Ext>,
 }
-impl<Ext> From<u128> for CID<Ext> {
-    fn from(inner: u128) -> Self {
+/// From little endian words
+impl<Ext> From<R2> for CID<Ext> {
+    fn from(resp: R2) -> Self {
+        let words = resp.words;
+        let inner = ((words[3] as u128) << 96)
+            | ((words[2] as u128) << 64)
+            | ((words[1] as u128) << 32)
+            | words[0] as u128;
+
         Self {
-            inner,
             bytes: inner.to_be_bytes(),
             ext: PhantomData,
         }
     }
 }
-/// From little endian words
-impl<Ext> From<[u32; 4]> for CID<Ext> {
-    fn from(words: [u32; 4]) -> Self {
-        let inner = ((words[3] as u128) << 96)
-            | ((words[2] as u128) << 64)
-            | ((words[1] as u128) << 32)
-            | words[0] as u128;
-        inner.into()
-    }
-}
 impl<Ext> CID<Ext> {
+    pub(crate) const fn inner(&self) -> u128 {
+        u128::from_be_bytes(self.bytes)
+    }
+
     /// Manufacturer ID
     pub fn manufacturer_id(&self) -> u8 {
         self.bytes[0]
@@ -230,8 +580,10 @@ impl<Ext> From<u128> for CSD<Ext> {
     }
 }
 /// From little endian words
-impl<Ext> From<[u32; 4]> for CSD<Ext> {
-    fn from(words: [u32; 4]) -> Self {
+impl<Ext> From<R2> for CSD<Ext> {
+    fn from(resp: R2) -> Self {
+        let words = resp.words;
+
         let inner = ((words[3] as u128) << 96)
             | ((words[2] as u128) << 64)
             | ((words[1] as u128) << 32)
@@ -298,9 +650,9 @@ impl<Ext> CSD<Ext> {
 #[derive(Clone, Copy)]
 pub struct CardStatus<Ext>(pub(crate) u32, PhantomData<Ext>);
 
-impl<Ext> From<u32> for CardStatus<Ext> {
-    fn from(word: u32) -> Self {
-        Self(word, PhantomData)
+impl<Ext> From<R1> for CardStatus<Ext> {
+    fn from(resp: R1) -> Self {
+        Self(resp.status, PhantomData)
     }
 }
 
@@ -387,10 +739,10 @@ impl<Ext> CardStatus<Ext> {
 ///
 /// R6
 #[derive(Debug, Copy, Clone, Default)]
-pub struct RCA<Ext>(pub(crate) u32, PhantomData<Ext>);
-impl<Ext> From<u32> for RCA<Ext> {
-    fn from(word: u32) -> Self {
-        Self(word, PhantomData)
+pub struct RCA<Ext>(pub(crate) u32, pub(crate) PhantomData<Ext>);
+impl<Ext> From<R6> for RCA<Ext> {
+    fn from(resp: R6) -> Self {
+        Self((resp.rca as u32) << 16 & resp.status as u32, PhantomData)
     }
 }
 impl<Ext> RCA<Ext> {

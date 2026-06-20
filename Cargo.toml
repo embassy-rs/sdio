@@ -5,10 +5,15 @@ authors = [
     "Johan Kristell <johan@jott.se>",
     "Richard Meadows <richard@richard.fish>",
 ]
-edition = "2018"
+edition = "2024"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jkristell/sdio-host"
 description = "SD host protocol library"
 keywords = ["sd", "sdio", "sdmmc"]
 categories = ["embedded", "no-std"]
+
+[dependencies]
+aligned = "0.4.3"
+block-device-driver = "0.2.0"
+embedded-hal = "1.0.0"

@@ -1,8 +1,231 @@
 //! eMMC-specific extensions to the core SDMMC protocol.
 
-pub use crate::common::*;
+use aligned::{A4, Aligned};
+use embedded_hal::delay::DelayNs;
 
-use core::{fmt, str};
+pub use crate::common::*;
+use crate::{
+    Addressable, BlockCommand, BlockDevice, BlockReadCommand, BusAdapter, BusWidth, Command,
+    ControlCommand, INIT_FREQ, MmcBus, MmcError, R1, R1b, R3, common,
+};
+
+use core::{convert::TryInto, fmt, marker::PhantomData, str};
+
+// ============================================================================
+// eMMC COMMANDS (MMC protocol)
+// ============================================================================
+
+/// CMD1 — SEND_OP_COND (MMC only)
+/// Response: R3 (no CRC)
+pub struct Cmd1 {
+    pub ocr: u32,
+}
+impl Command for Cmd1 {
+    const INDEX: u8 = 1;
+    type Resp<'a> = R3;
+    fn arg(&self) -> u32 {
+        self.ocr
+    }
+}
+impl ControlCommand for Cmd1 {}
+
+/// CMD3 — ASSIGN_RELATIVE_ADDR (RCA)
+pub struct Cmd3 {
+    pub address: u16,
+}
+impl Command for Cmd3 {
+    const INDEX: u8 = 3;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        (self.address as u32) << 16
+    }
+}
+impl ControlCommand for Cmd3 {}
+
+/// CMD3: Assigns relative address (RCA) to the Device
+pub fn assign_relative_address(address: u16) -> Cmd3 {
+    Cmd3 { address }
+}
+
+/// CMD1: Ask all cards to send their supported OCR, or become inactive if they cannot be
+/// supported.
+pub fn send_op_cond(ocr: u32) -> Cmd1 {
+    Cmd1 { ocr }
+}
+
+/// CMD5 — SLEEP / AWAKE (MMC version)
+/// NOTE: This is *not* SDIO CMD5.
+pub struct Cmd5 {
+    pub sleep: bool,
+    pub rca: u16,
+}
+impl Command for Cmd5 {
+    const INDEX: u8 = 5;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        ((self.sleep as u32) << 15) | ((self.rca as u32) << 16)
+    }
+}
+impl ControlCommand for Cmd5 {}
+
+/// CMD6 — SWITCH (MMC version)
+/// Used to write EXT_CSD fields.
+pub struct Cmd6 {
+    pub access: u8,  // 0 = command set, 1 = set bits, 2 = clear bits, 3 = write byte
+    pub index: u8,   // EXT_CSD index
+    pub value: u8,   // value to write
+    pub cmd_set: u8, // usually 0
+}
+impl Command for Cmd6 {
+    const INDEX: u8 = 6;
+    type Resp<'a> = R1b; // MMC SWITCH returns R1b (busy)
+    fn arg(&self) -> u32 {
+        ((self.access as u32) << 24)
+            | ((self.index as u32) << 16)
+            | ((self.value as u32) << 8)
+            | (self.cmd_set as u32)
+    }
+}
+impl ControlCommand for Cmd6 {}
+
+/// Specifies a method of modifying a field of EXT_CSD. Used for CMD6.
+pub enum AccessMode {
+    // The 0b00 pattern corresponds to Command Set, which has different semantics.
+    SetBits = 0b01,
+    ClearBits = 0b10,
+    WriteByte = 0b11,
+}
+
+/// Uses CMD6 to modify a field of the EXT_CSD.
+pub fn modify_ext_csd(access_mode: AccessMode, index: u8, value: u8) -> Cmd6 {
+    Cmd6 {
+        access: access_mode as u8,
+        index,
+        value,
+        cmd_set: 0,
+    }
+}
+
+/// CMD8 — SEND_EXT_CSD (MMC version)
+/// Reads 512‑byte EXT_CSD register.
+pub struct Cmd8<'a> {
+    pub buf: &'a mut Aligned<A4, [u8; 512]>,
+}
+impl<'a> Command for Cmd8<'a> {
+    const INDEX: u8 = 8;
+    type Resp<'b>
+        = R1
+    where
+        Self: 'b;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl<'a> BlockCommand for Cmd8<'a> {
+    fn block_size(&self) -> u16 {
+        512
+    }
+    fn block_count(&self) -> u32 {
+        1
+    }
+}
+impl<'a> BlockReadCommand for Cmd8<'a> {
+    fn buf(&mut self) -> &mut Aligned<A4, [u8]> {
+        &mut *self.buf
+    }
+}
+
+/// CMD8: Device sends its EXT_CSD register as a block of data.
+pub fn send_ext_csd(ext_csd: &mut ExtCSD) -> Cmd8<'_> {
+    Cmd8 {
+        buf: &mut ext_csd.inner,
+    }
+}
+
+/// CMD35 — ERASE_GROUP_START
+pub struct Cmd35 {
+    pub addr: u32,
+}
+impl Command for Cmd35 {
+    const INDEX: u8 = 35;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl ControlCommand for Cmd35 {}
+
+/// CMD36 — ERASE_GROUP_END
+pub struct Cmd36 {
+    pub addr: u32,
+}
+impl Command for Cmd36 {
+    const INDEX: u8 = 36;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        self.addr
+    }
+}
+impl ControlCommand for Cmd36 {}
+
+/// CMD39 — FAST_IO (rarely used)
+pub struct Cmd39 {
+    pub addr: u8,
+    pub data: u8,
+}
+impl Command for Cmd39 {
+    const INDEX: u8 = 39;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        ((self.addr as u32) << 8) | (self.data as u32)
+    }
+}
+impl ControlCommand for Cmd39 {}
+
+/// CMD40 — GO_IRQ_STATE (rare)
+pub struct Cmd40;
+impl Command for Cmd40 {
+    const INDEX: u8 = 40;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd40 {}
+
+//
+//
+// /// CMD14: Host reads the reversed bus testing data pattern from a card
+// pub fn bustest_read() -> Cmd<R1> {
+//     cmd(14, 0)
+// }
+//
+// /// CMD19: Host sends bus test pattern to a card
+// pub fn bustest_write() -> Cmd<R1> {
+//     cmd(19, 0)
+// }
+//
+// /// CMD23: Defines the number of blocks (read/write) for a block read or write
+// /// operation
+// pub fn set_block_count(blockcount: u16) -> Cmd<R1> {
+//     cmd(23, blockcount as u32)
+// }
+//
+// /// CMD35: Sets the address of the first erase group within a range to be
+// /// selected for erase
+// ///
+// /// Address is either byte address or sector address (set in OCR)
+// pub fn erase_group_start(address: u32) -> Cmd<R1> {
+//     cmd(35, address)
+// }
+//
+// /// CMD36: Sets the address of the last erase group within a continuous range to
+// /// be selected for erase
+// ///
+// /// Address is either byte address or sector address (set in OCR)
+// pub fn erase_group_end(address: u32) -> Cmd<R1> {
+//     cmd(36, address)
+// }
 
 /// Type marker for eMMC-specific extensions.
 #[derive(Clone, Copy, Default, Debug)]
@@ -88,7 +311,7 @@ impl CID<EMMC> {
 
     /// PSN field, indicating product serial number.
     pub fn serial(&self) -> u32 {
-        (self.inner >> 16) as u32
+        (self.inner() >> 16) as u32
     }
 
     /// MDT field, indicating manufacturing date.
@@ -96,8 +319,8 @@ impl CID<EMMC> {
     /// The return value is a (month, year) tuple where the month code has 1 = January and the year
     /// is an offset from either 1997 or 2013 depending on the value of `EXT_CSD_REV`.
     pub fn manufacturing_date(&self) -> (u8, u8) {
-        let month = (self.inner >> 12) as u8 & 0xF;
-        let year = (self.inner >> 8) as u8 & 0xF;
+        let month = (self.inner() >> 12) as u8 & 0xF;
+        let year = (self.inner() >> 8) as u8 & 0xF;
         (month, year)
     }
 }
@@ -188,59 +411,67 @@ impl fmt::Debug for CardStatus<EMMC> {
 /// Ref JEDEC 84-A43 Section 8.4
 #[derive(Clone, Copy)]
 pub struct ExtCSD {
-    pub inner: [u32; 128],
+    pub inner: Aligned<A4, [u8; 512]>,
 }
+
 impl Default for ExtCSD {
-    fn default() -> ExtCSD {
-        ExtCSD { inner: [0; 128] }
+    fn default() -> Self {
+        Self::new()
     }
 }
-/// From little endian words
-impl From<[u32; 128]> for ExtCSD {
-    fn from(inner: [u32; 128]) -> Self {
-        Self { inner }
-    }
-}
+
 impl ExtCSD {
+    /// Create a new `ExtCSD`
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            inner: Aligned([0u8; 512]),
+        }
+    }
+
+    fn inner_word(&self, i: usize) -> u32 {
+        u32::from_le_bytes(self.inner[i * 4..i * 4 + 4].try_into().unwrap())
+    }
+
     pub fn boot_info(&self) -> u8 {
         // byte 228
-        (self.inner[57] >> 24) as u8
+        (self.inner_word(57) >> 24) as u8
     }
     pub fn sleep_awake_timeout(&self) -> u8 {
         // byte 217
-        (self.inner[54] >> 16) as u8
+        (self.inner_word(54) >> 16) as u8
     }
     pub fn sleep_notification_time(&self) -> u8 {
         // byte 216
-        (self.inner[54] >> 24) as u8
+        (self.inner_word(54) >> 24) as u8
     }
     pub fn sector_count(&self) -> u32 {
         // bytes [215:212]
-        self.inner[53]
+        self.inner_word(53)
     }
     pub fn driver_strength(&self) -> u8 {
         // byte 197
-        (self.inner[49] >> 16) as u8
+        (self.inner_word(49) >> 16) as u8
     }
     pub fn card_type(&self) -> u8 {
         // byte 196
-        (self.inner[49] >> 24) as u8
+        (self.inner_word(49) >> 24) as u8
     }
     pub fn csd_structure_version(&self) -> u8 {
         // byte 194
-        (self.inner[48] >> 8) as u8
+        (self.inner_word(48) >> 8) as u8
     }
     pub fn extended_csd_revision(&self) -> u8 {
         // byte 192
-        (self.inner[48] >> 24) as u8
+        (self.inner_word(48) >> 24) as u8
     }
     pub fn data_sector_size(&self) -> u8 {
         // byte 61
-        (self.inner[15] >> 16) as u8
+        (self.inner_word(15) >> 16) as u8
     }
     pub fn secure_removal_type(&self) -> u8 {
         // byte 16
-        (self.inner[4] >> 24) as u8
+        (self.inner_word(4) >> 24) as u8
     }
 }
 impl fmt::Debug for ExtCSD {
@@ -264,6 +495,149 @@ impl fmt::Debug for ExtCSD {
 /// devices. SD hosts only ever retrieve RCAs from 32-bit card responses.
 impl From<u16> for RCA<EMMC> {
     fn from(address: u16) -> Self {
-        Self::from((address as u32) << 16)
+        Self((address as u32) << 16, PhantomData)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+/// eMMC storage
+pub struct Emmc {
+    /// The capacity of this card
+    pub capacity: CardCapacity,
+    /// Operation Conditions Register
+    pub ocr: OCR<EMMC>,
+    /// Relative Card Address
+    pub rca: u16,
+    /// Card ID
+    pub cid: CID<EMMC>,
+    /// Card Specific Data
+    pub csd: CSD<EMMC>,
+    /// Extended Card Specific Data
+    pub ext_csd: ExtCSD,
+}
+
+impl Addressable for Emmc {
+    type Ext = EMMC;
+
+    /// Get this peripheral's address on the SDMMC bus
+    fn get_address(&self) -> u16 {
+        self.rca
+    }
+
+    /// Is this a standard or high capacity peripheral?
+    fn get_capacity(&self) -> CardCapacity {
+        self.capacity
+    }
+
+    /// Size in bytes
+    fn size(&self) -> u64 {
+        u64::from(self.ext_csd.sector_count()) * 512
+    }
+
+    fn supports_cmd23(&self) -> bool {
+        true // mandatory on eMMC since spec v4.1
+    }
+}
+
+/// Card Storage Device
+impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
+    /// Create a new SD card
+    pub async fn new_emmc(bus: B, freq: u32, delay: &mut impl DelayNs) -> Result<Self, MmcError> {
+        let mut s = Self {
+            info: Emmc::default(),
+            bus: BusAdapter { bus },
+        };
+
+        s.acquire(freq, delay).await?;
+
+        Ok(s)
+    }
+
+    /// Initializes the card into a known state (or at least tries to).
+    async fn acquire(&mut self, freq: u32, _delay: &mut impl DelayNs) -> Result<(), MmcError> {
+        // Clamp the frequency to the supported bus frequency.
+        let freq = freq.clamp(0, self.bus.bus.supports_frequency());
+
+        let bus_width = self.bus.bus.supports_bus_width();
+
+        // While the SD/SDIO card or eMMC is in identification mode,
+        // the SDMMC_CK frequency must be no more than 400 kHz.
+        self.bus.bus.init_idle(INIT_FREQ).await?;
+
+        self.bus.send_command(common::idle(), None).await?;
+
+        let ocr = loop {
+            let high_voltage = 0b0 << 7;
+            let access_mode = 0b10 << 29;
+            let op_cond = high_voltage | access_mode | 0b1_1111_1111 << 15;
+            // Initialize card
+            let ocr: OCR<EMMC> = self
+                .bus
+                .send_command(send_op_cond(op_cond), None)
+                .await?
+                .into();
+            if !ocr.is_busy() {
+                // Power up done
+                break ocr;
+            }
+        };
+
+        self.info.capacity = if ocr.access_mode() == 0b10 {
+            // Card is SDHC or SDXC or SDUC
+            CardCapacity::HighCapacity
+        } else {
+            CardCapacity::StandardCapacity
+        };
+        self.info.ocr = ocr;
+        self.info.cid = self
+            .bus
+            .send_command(common::all_send_cid(), None)
+            .await?
+            .into();
+        self.info.rca = 1u16.into();
+
+        self.bus
+            .send_command(assign_relative_address(self.info.rca), None)
+            .await?;
+
+        self.info.csd = self
+            .bus
+            .send_command(common::send_csd(self.info.get_address()), None)
+            .await?
+            .into();
+
+        // Select card
+        self.bus.select_card(Some(self.info.get_address())).await?;
+
+        let widbus = match bus_width {
+            BusWidth::W1 => 0,
+            BusWidth::W4 => 1,
+            BusWidth::W8 => 2,
+        };
+
+        // Write bus width to ExtCSD byte 183
+        self.bus
+            .send_command(modify_ext_csd(AccessMode::WriteByte, 183, widbus), None)
+            .await?;
+
+        // Wait for ready after R1b response
+        loop {
+            let status: CardStatus<EMMC> = self
+                .bus
+                .send_command(common::card_status(self.info.rca, false), None)
+                .await?
+                .into();
+
+            if status.ready_for_data() {
+                break;
+            }
+        }
+
+        self.bus.bus.set_bus(bus_width, freq).await?;
+        self.bus
+            .read_blocks(send_ext_csd(&mut self.info.ext_csd), None)
+            .await?;
+
+        Ok(())
     }
 }
