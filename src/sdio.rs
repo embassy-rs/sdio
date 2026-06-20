@@ -5,7 +5,7 @@
 use core::{fmt, mem, slice};
 
 use aligned::{A4, Aligned};
-use embedded_hal::delay::DelayNs;
+use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     BlockCommand, BlockReadCommand, BlockWriteCommand, BusAdapter, BusWidth, ByteCommand,
@@ -513,7 +513,7 @@ impl<B: MmcBus> SdioCard<B> {
             if ready & func_mask == func_mask {
                 return Ok(());
             }
-            delay.delay_ms(2);
+            delay.delay_ms(2).await;
         }
     }
 

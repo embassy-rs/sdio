@@ -1,7 +1,7 @@
 //! SD-specific extensions to the core SDMMC protocol.
 
 use aligned::{A4, Aligned};
-use embedded_hal::delay::DelayNs;
+use embedded_hal_async::delay::DelayNs;
 
 pub use crate::common::*;
 use crate::{
@@ -1053,7 +1053,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         // clocks after the end of the switch command
         // transaction. We know the current clock period is < 80ns,
         // so a total delay of 640ns is required here
-        delay.delay_ns(640);
+        delay.delay_ns(640).await;
 
         // Function Selection of Function Group 1
         let selection =

@@ -1,7 +1,7 @@
 //! eMMC-specific extensions to the core SDMMC protocol.
 
 use aligned::{A4, Aligned};
-use embedded_hal::delay::DelayNs;
+use embedded_hal_async::delay::DelayNs;
 
 pub use crate::common::*;
 use crate::{
