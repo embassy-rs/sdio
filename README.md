@@ -30,15 +30,15 @@ implementation of common logic across all devices based on the SDIO standard.
 /// Everything else (card initialization, SDIO function drivers, block devices)
 /// is built on top of this trait.
 ///
-/// Methods should not return until DAT0 goes high if the associated reponse
-/// has `BUSY` set to `true`. Implementations may comply with this requirement
-/// by polling the card for status until an `Ok` result is received, or by awaiting
-/// DAT0 with hardware support.
+/// If hardware support is available, methods should not return until DAT0 goes high
+/// if the associated reponse has `BUSY` set to `true`.
 ///
 pub trait MmcBus {
     /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
+    ///
+    /// If called with `CMD11`, the bus should perform the voltage switch sequence.
     fn send_command<'a, C>(
-        &'a mut self,
+        &mut self,
         cmd: C,
     ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
     where
@@ -80,12 +80,6 @@ pub trait MmcBus {
     /// If called above 25mhz, this function should configure the peripheral for high speed before returning.
     fn set_bus(&mut self, width: BusWidth, hz: u32) -> impl Future<Output = Result<(), MmcError>>;
 
-    /// Switch to 1.8v; only called if `suppports_1v8()` returns true.
-    #[inline]
-    fn set_1v8(&mut self) -> impl Future<Output = Result<(), MmcError>> {
-        async { Err(MmcError::Unsupported) }
-    }
-
     /// Optional: whether the host supports native MMC mode. Otherwise, SPI mode is used.
     fn supports_mmc(&self) -> bool {
         false
@@ -96,7 +90,7 @@ pub trait MmcBus {
         BusWidth::W1
     }
 
-    /// Optional: whether the host supports 1.8v.
+    /// Optional: whether the host supports 1.8v. If true, `send_command` will be called with `CMD11`.
     fn supports_1v8(&self) -> bool {
         false
     }
