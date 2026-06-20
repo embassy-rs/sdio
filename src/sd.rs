@@ -808,11 +808,6 @@ pub struct Card {
 impl Addressable for Card {
     type Ext = SD;
 
-    /// Get this peripheral's address on the SDMMC bus
-    fn get_address(&self) -> u16 {
-        self.rca
-    }
-
     /// Is this a standard or high capacity peripheral?
     fn get_capacity(&self) -> CardCapacity {
         self.card_type
@@ -840,7 +835,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
     ) -> Result<Self, MmcError> {
         let mut s = Self {
             info: Card::default(),
-            bus: BusAdapter { bus },
+            bus: BusAdapter { bus, rca: 0 },
         };
 
         s.acquire(freq, delay).await?;
@@ -863,12 +858,12 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         // the SDMMC_CK frequency must be no more than 400 kHz.
         self.bus.bus.init_idle(INIT_FREQ).await?;
 
-        self.bus.send_command(common::idle(), None).await?;
+        self.bus.send_command(common::idle(), false).await?;
 
         // Check if cards supports CMD8 (with pattern)
         let cic: CIC = self
             .bus
-            .send_command(send_if_cond(1, 0xAA), None)
+            .send_command(send_if_cond(1, 0xAA), false)
             .await?
             .into();
 
@@ -887,7 +882,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         // `false` here (`has_vswitch` is hard-coded false).
         let request_18v = self.bus.bus.supports_1v8();
 
-        let ocr = loop {
+        self.info.ocr = loop {
             // 3.2-3.3V
             let voltage_window = 1 << 5;
             // Initialize card
@@ -896,7 +891,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
                 .bus
                 .send_command(
                     sd_send_op_cond(true, false, request_18v, voltage_window),
-                    Some(0),
+                    true,
                 )
                 .await?
                 .into();
@@ -907,18 +902,16 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
             }
         };
 
-        if ocr.high_capacity() {
+        self.info.card_type = if self.info.ocr.high_capacity() {
             // Card is SDHC or SDXC or SDUC
-            self.info.card_type = CardCapacity::HighCapacity;
+            CardCapacity::HighCapacity
         } else {
-            self.info.card_type = CardCapacity::StandardCapacity;
-        }
-        self.info.ocr = ocr;
+            CardCapacity::StandardCapacity
+        };
 
         if !self.bus.bus.supports_mmc() {
             // SPI mode
-
-            self.info.ocr = self.bus.send_command(read_ocr(), None).await?.into();
+            self.info.ocr = self.bus.send_command(read_ocr(), false).await?.into();
 
             //
             // Switch to requested frequency
@@ -939,29 +932,34 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         // the card accepted the S18A request (ocr.v18_allowed()). On
         // failure, fall through to 3.3V HS — `voltage_switch()`
         // already restored peripheral + GPIO state.
-        if request_18v && ocr.v18_allowed() {
-            self.bus.bus.set_1v8().await?;
+        if request_18v && self.info.ocr.v18_allowed() {
+            self.bus.send_command(voltage_switch(), false).await?;
         }
 
         self.info.cid = self
             .bus
-            .send_command(common::all_send_cid(), None)
+            .send_command(common::all_send_cid(), false)
             .await?
             .into();
 
-        self.info.rca =
-            RCA::<SD>::from(self.bus.send_command(send_relative_address(), None).await?).address();
+        self.bus.rca = RCA::<SD>::from(
+            self.bus
+                .send_command(send_relative_address(), false)
+                .await?,
+        )
+        .address();
+
         self.info.csd = self
             .bus
-            .send_command(common::send_csd(self.info.get_address()), None)
+            .send_command(common::send_csd(self.bus.rca), false)
             .await?
             .into();
 
         // Select card
-        self.bus.select_card(Some(self.info.get_address())).await?;
+        self.bus.select_card(Some(self.bus.rca)).await?;
         // Read SCR
         self.bus
-            .read_blocks(sd::send_scr(&mut self.info.scr), Some(self.info.rca))
+            .read_blocks(sd::send_scr(&mut self.info.scr), true)
             .await?;
 
         // Select bus width based on Sdmmc configuration and card capability
@@ -972,7 +970,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         };
 
         self.bus
-            .send_command(set_bus_width(acmd_arg == 2), Some(self.info.rca))
+            .send_command(set_bus_width(acmd_arg == 2), true)
             .await?;
 
         // Up to 25Mhz
@@ -983,7 +981,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
 
         // Read status
         self.bus
-            .read_blocks(sd::sd_status(&mut self.info.status), Some(self.info.rca))
+            .read_blocks(sd::sd_status(&mut self.info.status), true)
             .await?;
 
         if freq > 25_000_000 {
@@ -1002,7 +1000,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
 
                 let status: CardStatus<SD> = self
                     .bus
-                    .send_command(common::card_status(self.info.rca, false), None)
+                    .send_command(common::card_status(self.info.rca, false), false)
                     .await?
                     .into();
 
@@ -1013,7 +1011,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
 
             // Read status after signalling change
             self.bus
-                .read_blocks(sd::sd_status(&mut self.info.status), Some(self.info.rca))
+                .read_blocks(sd::sd_status(&mut self.info.status), true)
                 .await?;
         }
 
@@ -1048,7 +1046,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Card, B, BLOCK_SIZE> {
         let mut buf = Aligned([0u8; 64]);
 
         self.bus
-            .read_blocks(cmd6(set_function, &mut buf), None)
+            .read_blocks(cmd6(set_function, &mut buf), false)
             .await?;
 
         // Host is allowed to use the new functions at least 8

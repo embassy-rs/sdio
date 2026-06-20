@@ -506,8 +506,6 @@ pub struct Emmc {
     pub capacity: CardCapacity,
     /// Operation Conditions Register
     pub ocr: OCR<EMMC>,
-    /// Relative Card Address
-    pub rca: u16,
     /// Card ID
     pub cid: CID<EMMC>,
     /// Card Specific Data
@@ -518,11 +516,6 @@ pub struct Emmc {
 
 impl Addressable for Emmc {
     type Ext = EMMC;
-
-    /// Get this peripheral's address on the SDMMC bus
-    fn get_address(&self) -> u16 {
-        self.rca
-    }
 
     /// Is this a standard or high capacity peripheral?
     fn get_capacity(&self) -> CardCapacity {
@@ -545,7 +538,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
     pub async fn new_emmc(bus: B, freq: u32, delay: &mut impl DelayNs) -> Result<Self, MmcError> {
         let mut s = Self {
             info: Emmc::default(),
-            bus: BusAdapter { bus },
+            bus: BusAdapter { bus, rca: 0 },
         };
 
         s.acquire(freq, delay).await?;
@@ -564,7 +557,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
         // the SDMMC_CK frequency must be no more than 400 kHz.
         self.bus.bus.init_idle(INIT_FREQ).await?;
 
-        self.bus.send_command(common::idle(), None).await?;
+        self.bus.send_command(common::idle(), false).await?;
 
         let ocr = loop {
             let high_voltage = 0b0 << 7;
@@ -573,7 +566,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
             // Initialize card
             let ocr: OCR<EMMC> = self
                 .bus
-                .send_command(send_op_cond(op_cond), None)
+                .send_command(send_op_cond(op_cond), false)
                 .await?
                 .into();
             if !ocr.is_busy() {
@@ -591,23 +584,23 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
         self.info.ocr = ocr;
         self.info.cid = self
             .bus
-            .send_command(common::all_send_cid(), None)
+            .send_command(common::all_send_cid(), false)
             .await?
             .into();
-        self.info.rca = 1u16.into();
+        self.bus.rca = 1u16.into();
 
         self.bus
-            .send_command(assign_relative_address(self.info.rca), None)
+            .send_command(assign_relative_address(self.bus.rca), false)
             .await?;
 
         self.info.csd = self
             .bus
-            .send_command(common::send_csd(self.info.get_address()), None)
+            .send_command(common::send_csd(self.bus.rca), false)
             .await?
             .into();
 
         // Select card
-        self.bus.select_card(Some(self.info.get_address())).await?;
+        self.bus.select_card(Some(self.bus.rca)).await?;
 
         let widbus = match bus_width {
             BusWidth::W1 => 0,
@@ -617,25 +610,12 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, BLOCK_SIZE> {
 
         // Write bus width to ExtCSD byte 183
         self.bus
-            .send_command(modify_ext_csd(AccessMode::WriteByte, 183, widbus), None)
+            .send_command(modify_ext_csd(AccessMode::WriteByte, 183, widbus), false)
             .await?;
-
-        // Wait for ready after R1b response
-        loop {
-            let status: CardStatus<EMMC> = self
-                .bus
-                .send_command(common::card_status(self.info.rca, false), None)
-                .await?
-                .into();
-
-            if status.ready_for_data() {
-                break;
-            }
-        }
 
         self.bus.bus.set_bus(bus_width, freq).await?;
         self.bus
-            .read_blocks(send_ext_csd(&mut self.info.ext_csd), None)
+            .read_blocks(send_ext_csd(&mut self.info.ext_csd), false)
             .await?;
 
         Ok(())

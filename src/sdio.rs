@@ -397,16 +397,14 @@ impl From<R5> for SdioResponse {
 pub struct SdioCard<B: MmcBus> {
     bus: BusAdapter<B>,
     ocr: OCR<SDIO>,
-    rca: u16,
 }
 
 impl<B: MmcBus> SdioCard<B> {
     /// Create a new SD card
     pub async fn new_sdio(bus: B, freq: u32, delay: &mut impl DelayNs) -> Result<Self, MmcError> {
         let mut s = Self {
-            bus: BusAdapter { bus },
+            bus: BusAdapter { bus, rca: 0 },
             ocr: OCR::default(),
-            rca: 0,
         };
 
         s.acquire(freq, delay).await?;
@@ -429,7 +427,7 @@ impl<B: MmcBus> SdioCard<B> {
         self.ocr = loop {
             match self
                 .bus
-                .send_command(io_send_op_cond(false, 0x0), None)
+                .send_command(io_send_op_cond(false, 0x0), false)
                 .await
             {
                 Ok(r) => break Ok(r),
@@ -442,15 +440,15 @@ impl<B: MmcBus> SdioCard<B> {
         // UDB-based SDIO does not support io volt switch sequence
 
         // Get RCA
-        self.rca = RCA::<SDIO>::from(
+        self.bus.rca = RCA::<SDIO>::from(
             self.bus
-                .send_command(sd::send_relative_address(), None)
+                .send_command(sd::send_relative_address(), false)
                 .await?,
         )
         .address();
 
         // Select the card with RCA
-        self.bus.select_card(Some(self.rca)).await?;
+        self.bus.select_card(Some(self.bus.rca)).await?;
 
         let cap = self.cmd52_read(0, CCCR_CARD_CAP).await?;
 
@@ -557,7 +555,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data: 0,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {
@@ -578,7 +576,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {
@@ -604,7 +602,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {

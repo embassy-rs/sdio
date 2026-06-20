@@ -216,7 +216,7 @@ where
     CS: OutputPin,
     DLY: DelayNs,
 {
-    async fn send_command<'a, C>(&'a mut self, cmd: C) -> Result<C::Resp<'a>, MmcError>
+    async fn send_command<'a, C>(&mut self, cmd: C) -> Result<C::Resp<'a>, MmcError>
     where
         C: ControlCommand + 'a,
     {
