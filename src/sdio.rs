@@ -5,7 +5,7 @@
 use core::{fmt, mem, slice};
 
 use aligned::{A4, Aligned};
-use embedded_hal::delay::DelayNs;
+use embedded_hal_async::delay::DelayNs;
 
 use crate::{
     BlockCommand, BlockReadCommand, BlockWriteCommand, BusAdapter, BusWidth, ByteCommand,
@@ -394,28 +394,26 @@ impl From<R5> for SdioResponse {
 }
 
 /// SDIO Interface
-pub struct SdioCard<B: MmcBus> {
-    bus: BusAdapter<B>,
+pub struct SdioCard<B: MmcBus, D: DelayNs> {
+    bus: BusAdapter<B, D>,
     ocr: OCR<SDIO>,
-    rca: u16,
 }
 
-impl<B: MmcBus> SdioCard<B> {
+impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
     /// Create a new SD card
-    pub async fn new_sdio(bus: B, freq: u32, delay: &mut impl DelayNs) -> Result<Self, MmcError> {
+    pub async fn new_sdio(bus: B, freq: u32, delay: D) -> Result<Self, MmcError> {
         let mut s = Self {
-            bus: BusAdapter { bus },
+            bus: BusAdapter { bus, delay, rca: 0 },
             ocr: OCR::default(),
-            rca: 0,
         };
 
-        s.acquire(freq, delay).await?;
+        s.acquire(freq).await?;
 
         Ok(s)
     }
 
     /// Initializes the card into a known state (or at least tries to).
-    async fn acquire(&mut self, freq: u32, _delay: &mut impl DelayNs) -> Result<(), MmcError> {
+    async fn acquire(&mut self, freq: u32) -> Result<(), MmcError> {
         // Clamp the frequency to the supported bus frequency.
         let freq = freq.clamp(0, self.bus.bus.supports_frequency());
 
@@ -426,31 +424,40 @@ impl<B: MmcBus> SdioCard<B> {
         // TODO: impl. loop timeouts
 
         // Get IO OCR
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        let mut i = 0;
         self.ocr = loop {
             match self
                 .bus
-                .send_command(io_send_op_cond(false, 0x0), None)
+                .send_command(io_send_op_cond(false, 0x0), false)
                 .await
             {
                 Ok(r) => break Ok(r),
-                Err(MmcError::Timeout) => continue,
+                Err(MmcError::Timeout) => {}
                 Err(e) => break Err(e),
             }
+
+            if i > 750 {
+                return Err(MmcError::Timeout);
+            }
+
+            self.bus.delay.delay_ms(1).await;
+            i += 1;
         }?
         .into();
 
         // UDB-based SDIO does not support io volt switch sequence
 
         // Get RCA
-        self.rca = RCA::<SDIO>::from(
+        self.bus.rca = RCA::<SDIO>::from(
             self.bus
-                .send_command(sd::send_relative_address(), None)
+                .send_command(sd::send_relative_address(), false)
                 .await?,
         )
         .address();
 
         // Select the card with RCA
-        self.bus.select_card(Some(self.rca)).await?;
+        self.bus.select_card(Some(self.bus.rca)).await?;
 
         let cap = self.cmd52_read(0, CCCR_CARD_CAP).await?;
 
@@ -515,7 +522,7 @@ impl<B: MmcBus> SdioCard<B> {
             if ready & func_mask == func_mask {
                 return Ok(());
             }
-            delay.delay_ms(2);
+            delay.delay_ms(2).await;
         }
     }
 
@@ -557,7 +564,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data: 0,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {
@@ -578,7 +585,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {
@@ -604,7 +611,7 @@ impl<B: MmcBus> SdioCard<B> {
                     addr,
                     data,
                 },
-                None,
+                false,
             )
             .await?;
         if resp.is_error() {

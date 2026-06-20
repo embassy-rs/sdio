@@ -17,10 +17,11 @@
 #![no_std]
 
 use aligned::{A4, Aligned};
+use embedded_hal_async::delay::DelayNs;
 
 use crate::sd::{
-    CardCapacity, read_multiple_blocks, read_single_block, set_block_length, write_multiple_blocks,
-    write_single_block,
+    CardCapacity, CardStatus, read_multiple_blocks, read_single_block, set_block_length,
+    write_multiple_blocks, write_single_block,
 };
 
 pub mod common;
@@ -195,15 +196,15 @@ pub trait ByteWriteCommand: ByteCommand {
 /// Everything else (card initialization, SDIO function drivers, block devices)
 /// is built on top of this trait.
 ///
-/// Methods should not return until DAT0 goes high if the associated reponse
-/// has `BUSY` set to `true`. Implementations may comply with this requirement
-/// by polling the card for status until an `Ok` result is received, or by awaiting
-/// DAT0 with hardware support.
+/// If hardware support is available, methods should not return until DAT0 goes high
+/// if the associated reponse has `BUSY` set to `true`.
 ///
 pub trait MmcBus {
     /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
+    ///
+    /// If called with `CMD11`, the bus should perform the voltage switch sequence.
     fn send_command<'a, C>(
-        &'a mut self,
+        &mut self,
         cmd: C,
     ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
     where
@@ -245,12 +246,6 @@ pub trait MmcBus {
     /// If called above 25mhz, this function should configure the peripheral for high speed before returning.
     fn set_bus(&mut self, width: BusWidth, hz: u32) -> impl Future<Output = Result<(), MmcError>>;
 
-    /// Switch to 1.8v; only called if `suppports_1v8()` returns true.
-    #[inline]
-    fn set_1v8(&mut self) -> impl Future<Output = Result<(), MmcError>> {
-        async { Err(MmcError::Unsupported) }
-    }
-
     /// Optional: whether the host supports native MMC mode. Otherwise, SPI mode is used.
     fn supports_mmc(&self) -> bool {
         false
@@ -261,7 +256,7 @@ pub trait MmcBus {
         BusWidth::W1
     }
 
-    /// Optional: whether the host supports 1.8v.
+    /// Optional: whether the host supports 1.8v. If true, `send_command` will be called with `CMD11`.
     fn supports_1v8(&self) -> bool {
         false
     }
@@ -511,18 +506,20 @@ impl Response for R5 {
 }
 
 /// Bus Adapter that implements common functionality of all bus users
-struct BusAdapter<B: MmcBus> {
+struct BusAdapter<B: MmcBus, D: DelayNs> {
     pub bus: B,
+    pub delay: D,
+    pub rca: u16,
 }
 
-impl<B: MmcBus> BusAdapter<B> {
+impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
     /// Select one card and place it into the _Tranfer State_
     ///
     /// If `None` is specifed for `card`, all cards are put back into
     /// _Stand-by State_
     pub async fn select_card(&mut self, rca: Option<u16>) -> Result<(), MmcError> {
         match self
-            .send_command(common::select_card(rca.unwrap_or(0)), None)
+            .send_command(common::select_card(rca.unwrap_or(0)), false)
             .await
         {
             Err(MmcError::Timeout) if rca == None => Ok(()),
@@ -530,12 +527,36 @@ impl<B: MmcBus> BusAdapter<B> {
         }
     }
 
-    async fn app_cmd(&mut self, app_cmd: Option<u16>) -> Result<(), MmcError> {
-        if let Some(rca) = app_cmd {
-            self.bus.send_command(sd::app_cmd(rca)).await?;
+    async fn app_cmd(&mut self, app_cmd: bool) -> Result<(), MmcError> {
+        if app_cmd {
+            self.bus.send_command(sd::app_cmd(self.rca)).await?;
         }
 
         Ok(())
+    }
+
+    pub async fn wait_if_required<C: Command>(&mut self) -> Result<(), MmcError> {
+        if !C::Resp::BUSY {
+            return Ok(());
+        }
+
+        // Wait up to 750ms + cmd time for ready after R1b response
+        // Note: this is a rather simplistic timeout loop. It can be improved later.
+        for _ in 0..750 {
+            let status: CardStatus<()> = self
+                .bus
+                .send_command(common::card_status(self.rca, false))
+                .await?
+                .into();
+
+            if status.ready_for_data() {
+                return Ok(());
+            }
+
+            self.delay.delay_ms(1).await;
+        }
+
+        Err(MmcError::Timeout)
     }
 
     /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
@@ -544,10 +565,13 @@ impl<B: MmcBus> BusAdapter<B> {
     pub async fn send_command<'a, C: ControlCommand + 'a>(
         &'a mut self,
         cmd: C,
-        app_cmd: Option<u16>,
+        app_cmd: bool,
     ) -> Result<C::Resp<'a>, MmcError> {
         self.app_cmd(app_cmd).await?;
-        self.bus.send_command(cmd).await
+        let res = self.bus.send_command(cmd).await?;
+        self.wait_if_required::<C>().await?;
+
+        Ok(res)
     }
 
     /// Read N blocks of fixed size (CMD17, CMD18, CMD53 block mode).
@@ -556,7 +580,7 @@ impl<B: MmcBus> BusAdapter<B> {
     pub async fn read_blocks<'a, C: BlockReadCommand + 'a>(
         &mut self,
         cmd: C,
-        app_cmd: Option<u16>,
+        app_cmd: bool,
     ) -> Result<C::Resp<'a>, MmcError> {
         let block_size = cmd.block_size();
 
@@ -564,7 +588,10 @@ impl<B: MmcBus> BusAdapter<B> {
             .send_command(set_block_length(block_size as u32))
             .await?;
         self.app_cmd(app_cmd).await?;
-        self.bus.read_blocks(cmd).await
+        let res = self.bus.read_blocks(cmd).await?;
+        self.wait_if_required::<C>().await?;
+
+        Ok(res)
     }
 
     /// Write N blocks of fixed size (CMD24, CMD25, CMD53 block mode).
@@ -573,7 +600,7 @@ impl<B: MmcBus> BusAdapter<B> {
     pub async fn write_blocks<'a, C: BlockWriteCommand + 'a>(
         &mut self,
         cmd: C,
-        app_cmd: Option<u16>,
+        app_cmd: bool,
     ) -> Result<C::Resp<'a>, MmcError> {
         let block_size = cmd.block_size();
 
@@ -581,7 +608,10 @@ impl<B: MmcBus> BusAdapter<B> {
             .send_command(set_block_length(block_size as u32))
             .await?;
         self.app_cmd(app_cmd).await?;
-        self.bus.write_blocks(cmd).await
+        let res = self.bus.write_blocks(cmd).await?;
+        self.wait_if_required::<C>().await?;
+
+        Ok(res)
     }
 }
 
@@ -589,9 +619,6 @@ impl<B: MmcBus> BusAdapter<B> {
 pub trait Addressable: Sized + Clone {
     /// Associated type
     type Ext;
-
-    /// Get this peripheral's address on the SDMMC bus
-    fn get_address(&self) -> u16;
 
     /// Is this a standard or high capacity peripheral?
     fn get_capacity(&self) -> CardCapacity;
@@ -617,14 +644,16 @@ pub enum Signalling {
 }
 
 /// Represents a block storage device
-pub struct BlockDevice<T: Addressable, B: MmcBus, const BLOCK_SIZE: usize> {
+pub struct BlockDevice<T: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> {
     info: T,
-    bus: BusAdapter<B>,
+    bus: BusAdapter<B, D>,
 }
 
 /// Card or Emmc storage device
-impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<A, B, BLOCK_SIZE> {
-    /// Write a block
+impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
+    BlockDevice<A, B, D, BLOCK_SIZE>
+{
+    /// Get the card info
     pub fn card(&self) -> A {
         self.info.clone()
     }
@@ -646,7 +675,7 @@ impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<A, B, BLOCK
         };
 
         self.bus
-            .read_blocks(read_single_block(addr, block), None)
+            .read_blocks(read_single_block(addr, block), false)
             .await?;
 
         Ok(())
@@ -669,13 +698,13 @@ impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<A, B, BLOCK
         };
 
         self.bus
-            .read_blocks(read_multiple_blocks(addr, blocks), None)
+            .read_blocks(read_multiple_blocks(addr, blocks), false)
             .await?;
 
         Ok(())
     }
 
-    /// Read a data block.
+    /// Write a data block.
     #[inline]
     async fn write_block(
         &mut self,
@@ -692,13 +721,13 @@ impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<A, B, BLOCK
         };
 
         self.bus
-            .write_blocks(write_single_block(addr, block), None)
+            .write_blocks(write_single_block(addr, block), false)
             .await?;
 
         Ok(())
     }
 
-    /// Read multiple data blocks.
+    /// Write multiple data blocks.
     #[inline]
     async fn write_blocks(
         &mut self,
@@ -715,15 +744,15 @@ impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize> BlockDevice<A, B, BLOCK
         };
 
         self.bus
-            .write_blocks(write_multiple_blocks(addr, blocks), None)
+            .write_blocks(write_multiple_blocks(addr, blocks), false)
             .await?;
 
         Ok(())
     }
 }
 
-impl<A: Addressable, B: MmcBus, const BLOCK_SIZE: usize>
-    block_device_driver::BlockDevice<BLOCK_SIZE> for BlockDevice<A, B, BLOCK_SIZE>
+impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
+    block_device_driver::BlockDevice<BLOCK_SIZE> for BlockDevice<A, B, D, BLOCK_SIZE>
 {
     type Align = A4;
     type Error = MmcError;
