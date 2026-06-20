@@ -70,7 +70,7 @@ impl<SPI, CS, DLY> SpiMmcBus<SPI, CS, DLY> {
         // Command frame: [0b01xxxxxx, arg(4), crc]
         let idx = cmd.index() & 0x3F;
         let arg = cmd.arg();
-        let header = ((0x40u32 | idx as u32) << 32) | (arg as u32);
+        let header = ((0x40u32 | idx as u32) << 24) | (arg >> 8);
         let crc = Self::crc7(header);
 
         let buf = [

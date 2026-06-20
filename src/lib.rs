@@ -583,30 +583,6 @@ impl<B: MmcBus> BusAdapter<B> {
         self.app_cmd(app_cmd).await?;
         self.bus.write_blocks(cmd).await
     }
-
-    /// Read an arbitrary number of bytes (CMD53 byte mode, SPI multi-byte).
-    ///
-    /// Provide `Some(rca)` to execute this as an app cmd.
-    pub async fn read_bytes<'a, C: ByteReadCommand + 'a>(
-        &mut self,
-        cmd: C,
-        app_cmd: Option<u16>,
-    ) -> Result<C::Resp<'a>, MmcError> {
-        self.app_cmd(app_cmd).await?;
-        self.bus.read_bytes(cmd).await
-    }
-
-    /// Write an arbitrary number of bytes (CMD53 byte mode, SPI multi-byte).
-    ///
-    /// Provide `Some(rca)` to execute this as an app cmd.
-    pub async fn write_bytes<'a, C: ByteWriteCommand + 'a>(
-        &mut self,
-        cmd: C,
-        app_cmd: Option<u16>,
-    ) -> Result<C::Resp<'a>, MmcError> {
-        self.app_cmd(app_cmd).await?;
-        self.bus.write_bytes(cmd).await
-    }
 }
 
 /// Represents either an SD or EMMC card

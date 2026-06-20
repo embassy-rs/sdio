@@ -394,13 +394,13 @@ impl From<R5> for SdioResponse {
 }
 
 /// SDIO Interface
-pub struct SdioCard<B: MmcBus, const BLOCK_SIZE: usize> {
+pub struct SdioCard<B: MmcBus> {
     bus: BusAdapter<B>,
     ocr: OCR<SDIO>,
     rca: u16,
 }
 
-impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
+impl<B: MmcBus> SdioCard<B> {
     /// Create a new SD card
     pub async fn new_sdio(bus: B, freq: u32, delay: &mut impl DelayNs) -> Result<Self, MmcError> {
         let mut s = Self {
@@ -616,7 +616,7 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
     // ── CMD53 helpers (bulk transfers) ────────────────────────────────────────
 
     /// Read in block mode using cmd53
-    pub async fn cmd53_read_blocks(
+    pub async fn cmd53_read_blocks<const BLOCK_SIZE: usize>(
         &mut self,
         function: u8,
         increment: bool,
@@ -624,15 +624,13 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
         buf: &mut [Aligned<A4, [u8; BLOCK_SIZE]>],
     ) -> Result<SdioResponse, MmcError> {
         self.bus
-            .read_blocks(
-                Cmd53BlockRead {
-                    function,
-                    increment,
-                    addr,
-                    buf,
-                },
-                None,
-            )
+            .bus
+            .read_blocks(Cmd53BlockRead {
+                function,
+                increment,
+                addr,
+                buf,
+            })
             .await
             .map(|r| r.into())
     }
@@ -646,20 +644,18 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
         buf: &mut Aligned<A4, [u8]>,
     ) -> Result<SdioResponse, MmcError> {
         self.bus
-            .read_bytes(
-                Cmd53ByteRead {
-                    function,
-                    increment,
-                    addr,
-                    buf,
-                },
-                None,
-            )
+            .bus
+            .read_bytes(Cmd53ByteRead {
+                function,
+                increment,
+                addr,
+                buf,
+            })
             .await
             .map(|r| r.into())
     }
     /// Write in block mode using cmd53
-    pub async fn cmd53_write_blocks(
+    pub async fn cmd53_write_blocks<const BLOCK_SIZE: usize>(
         &mut self,
         function: u8,
         increment: bool,
@@ -667,15 +663,13 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
         buf: &mut [Aligned<A4, [u8; BLOCK_SIZE]>],
     ) -> Result<SdioResponse, MmcError> {
         self.bus
-            .write_blocks(
-                Cmd53BlockWrite {
-                    function,
-                    increment,
-                    addr,
-                    buf,
-                },
-                None,
-            )
+            .bus
+            .write_blocks(Cmd53BlockWrite {
+                function,
+                increment,
+                addr,
+                buf,
+            })
             .await
             .map(|r| r.into())
     }
@@ -689,15 +683,13 @@ impl<B: MmcBus, const BLOCK_SIZE: usize> SdioCard<B, BLOCK_SIZE> {
         buf: &mut Aligned<A4, [u8]>,
     ) -> Result<SdioResponse, MmcError> {
         self.bus
-            .write_bytes(
-                Cmd53ByteWrite {
-                    function,
-                    increment,
-                    addr,
-                    buf,
-                },
-                None,
-            )
+            .bus
+            .write_bytes(Cmd53ByteWrite {
+                function,
+                increment,
+                addr,
+                buf,
+            })
             .await
             .map(|r| r.into())
     }
