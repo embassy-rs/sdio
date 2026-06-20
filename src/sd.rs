@@ -829,14 +829,24 @@ impl Addressable for Card {
 impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Card, B, D, BLOCK_SIZE> {
     /// Create a new SD card
     pub async fn new_sd_card(bus: B, freq: u32, delay: D) -> Result<Self, MmcError> {
-        let mut s = Self {
-            info: Card::default(),
-            bus: BusAdapter { bus, delay, rca: 0 },
-        };
+        let mut s = Self::new_uninit_sd_card(bus, delay);
 
         s.acquire(freq).await?;
 
         Ok(s)
+    }
+
+    /// Create a uninit SD card
+    pub fn new_uninit_sd_card(bus: B, delay: D) -> Self {
+        Self {
+            info: Card::default(),
+            bus: BusAdapter { bus, delay, rca: 0 },
+        }
+    }
+
+    /// Initializes the card into a known state (or at least tries to).
+    pub async fn reacquire(&mut self, freq: u32) -> Result<(), MmcError> {
+        self.acquire(freq).await
     }
 
     /// Initializes the card into a known state (or at least tries to).

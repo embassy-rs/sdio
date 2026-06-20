@@ -534,16 +534,26 @@ impl Addressable for Emmc {
 
 /// Card Storage Device
 impl<B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> BlockDevice<Emmc, B, D, BLOCK_SIZE> {
-    /// Create a new SD card
+    /// Create a new EMMC
     pub async fn new_emmc(bus: B, freq: u32, delay: D) -> Result<Self, MmcError> {
-        let mut s = Self {
-            info: Emmc::default(),
-            bus: BusAdapter { bus, delay, rca: 0 },
-        };
+        let mut s = Self::new_uninit_emmc(bus, delay);
 
         s.acquire(freq).await?;
 
         Ok(s)
+    }
+
+    /// Create a uninit EMMC
+    pub fn new_uninit_emmc(bus: B, delay: D) -> Self {
+        Self {
+            info: Emmc::default(),
+            bus: BusAdapter { bus, delay, rca: 0 },
+        }
+    }
+
+    /// Initializes the card into a known state (or at least tries to).
+    pub async fn reacquire(&mut self, freq: u32) -> Result<(), MmcError> {
+        self.acquire(freq).await
     }
 
     /// Initializes the card into a known state (or at least tries to).
