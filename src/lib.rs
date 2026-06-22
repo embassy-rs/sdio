@@ -830,6 +830,9 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
 
     /// Reacquire the device
     pub async fn reacquire(&mut self, freq: u32) -> Result<(), MmcError> {
+        // Clamp the frequency to the supported bus frequency.
+        let freq = freq.clamp(0, self.bus.bus.supports_frequency());
+
         self.bus.init_idle().await?;
         self.info = A::acquire(&mut self.bus, freq).await?;
 

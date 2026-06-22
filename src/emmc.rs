@@ -541,9 +541,6 @@ impl Acquireable for Emmc {
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
 
-        // Clamp the frequency to the supported bus frequency.
-        let freq = freq.clamp(0, bus.bus.supports_frequency());
-
         // Get the bus width configured in the Sdmmc peripheral
         let bus_width = bus.bus.supports_bus_width();
 

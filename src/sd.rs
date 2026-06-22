@@ -831,9 +831,6 @@ impl Acquireable for SdCard {
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
 
-        // Clamp the frequency to the supported bus frequency.
-        let freq = freq.clamp(0, bus.bus.supports_frequency());
-
         // Get the bus width configured in the Sdmmc peripheral
         let configured_bus_width = match bus.bus.supports_bus_width() {
             BusWidth::W8 => return Err(MmcError::Unsupported),
