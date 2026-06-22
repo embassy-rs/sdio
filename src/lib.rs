@@ -932,13 +932,13 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             _ => block_idx,
         };
 
-        if self.info.supports_acmd23() {
+        if self.info.supports_acmd23() && false {
             self.bus
                 .send_command(sd::set_block_count(blocks.len() as u32), true)
                 .await?;
         }
 
-        if self.info.supports_cmd23() {
+        if self.info.supports_cmd23() && false {
             self.bus
                 .send_command(sd::set_block_count(blocks.len() as u32), false)
                 .await?;
@@ -948,7 +948,7 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             .write_blocks(write_multiple_blocks(addr, blocks), false)
             .await?;
 
-        if !self.info.supports_cmd23() {
+        if !self.info.supports_cmd23() || true {
             self.bus.send_command(stop_transmission(), false).await?;
         }
 
