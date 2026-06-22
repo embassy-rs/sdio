@@ -860,6 +860,7 @@ impl Addressable for SdCard {
 impl Acquirable for SdCard {
     async fn acquire<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
+        block_size: BlockSize,
         freq: u32,
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
@@ -979,11 +980,16 @@ impl Acquirable for SdCard {
             } else {
                 return Err(MmcError::SignalingSwitchFailed);
             }
-
-            // Read status after signalling change
-            bus.read_blocks(sd::sd_status(&mut this.status), true)
-                .await?;
         }
+
+        // Read status after signalling change
+        bus.read_blocks(sd::sd_status(&mut this.status), true)
+            .await?;
+
+        // Set block size once
+        bus.send_command(set_block_length(block_size.len() as u32), false)
+            .await?
+            .to_result()?;
 
         Ok(this)
     }

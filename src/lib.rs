@@ -13,8 +13,8 @@ use aligned::{A4, Aligned};
 use embedded_hal_async::delay::DelayNs;
 
 use crate::sd::{
-    BlockSize, CardCapacity, CardStatus, OCR, read_multiple_blocks, read_single_block,
-    set_block_length, stop_transmission, write_multiple_blocks, write_single_block,
+    BlockSize, CardCapacity, CardStatus, OCR, block_size, read_multiple_blocks, read_single_block,
+    stop_transmission, write_multiple_blocks, write_single_block,
 };
 
 pub mod common;
@@ -635,13 +635,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
         }
     }
 
-    /// Set the block size if required
-    async fn set_block_size<C: BlockCommand>(&mut self, cmd: &C) -> Result<(), MmcError> {
-        self.send_command(set_block_length(cmd.block_size().len() as u32), false)
-            .await?
-            .to_result()
-    }
-
     /// Wait for the card to be ready if required
     async fn wait_if_required<R: Response>(&mut self) -> Result<(), MmcError> {
         if !R::BUSY {
@@ -738,7 +731,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
         cmd: C,
         app_cmd: bool,
     ) -> Result<C::Resp<'a>, MmcError> {
-        self.set_block_size(&cmd).await?;
         self.app_cmd(app_cmd).await?;
         let res = self.bus.read_blocks(cmd).await?;
         self.wait_if_required::<C::Resp<'a>>().await?;
@@ -756,7 +748,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
         cmd: C,
         app_cmd: bool,
     ) -> Result<C::Resp<'a>, MmcError> {
-        self.set_block_size(&cmd).await?;
         self.app_cmd(app_cmd).await?;
         let res = self.bus.write_blocks(cmd).await?;
         self.wait_if_required::<C::Resp<'a>>().await?;
@@ -782,6 +773,7 @@ pub enum Signalling {
 trait Acquirable: Sized + Clone + Default {
     fn acquire<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
+        block_size: BlockSize,
         freq: u32,
     ) -> impl Future<Output = Result<Self, MmcError>>;
 }
@@ -837,7 +829,7 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
         let freq = freq.clamp(0, self.bus.bus.supports_frequency());
 
         self.bus.init_idle().await?;
-        self.info = A::acquire(&mut self.bus, freq).await?;
+        self.info = A::acquire(&mut self.bus, block_size(BLOCK_SIZE), freq).await?;
 
         Ok(())
     }
@@ -932,13 +924,13 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             _ => block_idx,
         };
 
-        if self.info.supports_acmd23() && false {
+        if self.info.supports_acmd23() {
             self.bus
                 .send_command(sd::set_block_count(blocks.len() as u32), true)
                 .await?;
         }
 
-        if self.info.supports_cmd23() && false {
+        if self.info.supports_cmd23() {
             self.bus
                 .send_command(sd::set_block_count(blocks.len() as u32), false)
                 .await?;
@@ -948,7 +940,7 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             .write_blocks(write_multiple_blocks(addr, blocks), false)
             .await?;
 
-        if !self.info.supports_cmd23() || true {
+        if !self.info.supports_cmd23() {
             self.bus.send_command(stop_transmission(), false).await?;
         }
 
