@@ -953,15 +953,15 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             _ => block_idx,
         };
 
-        if self.info.supports_cmd23() {
+        if self.info.supports_acmd23() {
             self.bus
                 .send_command(sd::set_block_count(blocks.len() as u32), true)
                 .await?;
         }
 
-        if self.info.supports_acmd23() {
+        if self.info.supports_cmd23() {
             self.bus
-                .send_command(sd::set_block_count(blocks.len() as u32), true)
+                .send_command(sd::set_block_count(blocks.len() as u32), false)
                 .await?;
         }
 
