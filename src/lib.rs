@@ -226,14 +226,14 @@ pub trait MmcBus {
 
     /// Tune the bus, if required. Called after the bus is set to the target frequency; needed for uhs.
     #[allow(unused_variables)]
-    fn tune_bus<C>(
+    fn tune_bus<O>(
         &mut self,
         width: BusWidth,
         hz: u32,
-        status_command: &C,
+        op: &mut O,
     ) -> impl Future<Output = Result<(), MmcError>>
     where
-        C: ControlCommand,
+        O: TuningOp,
     {
         async { Ok(()) }
     }
@@ -301,16 +301,11 @@ impl<T: MmcBus> MmcBus for &mut T {
         T::write_bytes(self, cmd).await
     }
 
-    async fn tune_bus<C>(
-        &mut self,
-        width: BusWidth,
-        hz: u32,
-        status_command: &C,
-    ) -> Result<(), MmcError>
+    async fn tune_bus<O>(&mut self, width: BusWidth, hz: u32, op: &mut O) -> Result<(), MmcError>
     where
-        C: ControlCommand,
+        O: TuningOp,
     {
-        T::tune_bus(self, width, hz, status_command).await
+        T::tune_bus(self, width, hz, op).await
     }
 
     async fn init_idle(&mut self, hz: u32) -> Result<(), MmcError> {
@@ -338,9 +333,8 @@ impl<T: MmcBus> MmcBus for &mut T {
     }
 }
 
-/// ------------------------------
 /// R1 — Normal status response
-/// ------------------------------
+///
 /// 48-bit, CRC-checked, no busy
 pub struct R1 {
     pub status: u32,
@@ -585,8 +579,27 @@ impl Response for R5 {
     }
 }
 
-// Allow passing `ControlCommand` by reference
-impl<T: ControlCommand> Command for &T {
+/// Bus Tuning Operation
+pub trait TuningOp {
+    /// Execute the operation. If error, abort the operation and return.
+    fn exec<B: MmcBus>(&mut self, bus: &mut B) -> impl Future<Output = Result<bool, MmcError>>;
+}
+
+// Allow passing some commands by reference
+impl<T: Command> Command for &T {
+    const INDEX: u8 = T::INDEX;
+
+    type Resp<'a>
+        = T::Resp<'a>
+    where
+        Self: 'a;
+
+    fn arg(&self) -> u32 {
+        T::arg(&self)
+    }
+}
+
+impl<T: Command> Command for &mut T {
     const INDEX: u8 = T::INDEX;
 
     type Resp<'a>
@@ -600,6 +613,22 @@ impl<T: ControlCommand> Command for &T {
 }
 
 impl<T: ControlCommand> ControlCommand for &T {}
+
+impl<T: BlockCommand> BlockCommand for &mut T {
+    fn block_count(&self) -> u32 {
+        T::block_count(self)
+    }
+
+    fn block_size(&self) -> BlockSize {
+        T::block_size(self)
+    }
+}
+
+impl<T: BlockReadCommand> BlockReadCommand for &mut T {
+    fn buf(&mut self) -> &mut Aligned<A4, [u8]> {
+        T::buf(self)
+    }
+}
 
 /// Bus Adapter that implements common functionality of all bus users
 struct BusAdapter<B: MmcBus, D: DelayNs> {

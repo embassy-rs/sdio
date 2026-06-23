@@ -6,7 +6,7 @@ use embedded_hal_async::delay::DelayNs;
 pub use crate::common::*;
 use crate::{
     Acquirable, Addressable, BlockCommand, BlockDevice, BlockReadCommand, BusAdapter, BusWidth,
-    Command, ControlCommand, MmcBus, MmcError, R1, R3, R6, R7, Signalling, common, sd,
+    Command, ControlCommand, MmcBus, MmcError, R1, R3, R6, R7, Signalling, TuningOp, common, sd,
 };
 
 /// Type marker for SD-specific extensions.
@@ -110,21 +110,58 @@ pub fn voltage_switch() -> Cmd11 {
 }
 
 /// CMD19 — SEND_TUNING_BLOCK
-pub struct Cmd19 {
+pub struct Cmd19<'b> {
     pub addr: u32,
+    pub buf: &'b mut Aligned<A4, [u8; 64]>,
 }
-impl Command for Cmd19 {
+impl<'b> Command for Cmd19<'b> {
     const INDEX: u8 = 19;
-    type Resp<'a> = R1;
+    type Resp<'a>
+        = R1
+    where
+        Self: 'a;
     fn arg(&self) -> u32 {
         self.addr
     }
 }
-impl ControlCommand for Cmd19 {}
+impl<'a> BlockCommand for Cmd19<'a> {
+    fn block_count(&self) -> u32 {
+        1
+    }
+
+    fn block_size(&self) -> BlockSize {
+        block_size(64)
+    }
+}
+
+impl<'a> BlockReadCommand for Cmd19<'a> {
+    fn buf(&mut self) -> &mut Aligned<A4, [u8]> {
+        self.buf
+    }
+}
+
+impl<'a> TuningOp for Cmd19<'a> {
+    async fn exec<B: MmcBus>(&mut self, bus: &mut B) -> Result<bool, MmcError> {
+        // The official 64‑byte SD tuning pattern
+        const TUNING_PATTERN: [u8; 64] = [
+            0xFF, 0x00, 0xAA, 0x55, 0xFF, 0x00, 0xAA, 0x55, 0xFF, 0x00, 0xAA, 0x55, 0xFF, 0x00,
+            0xAA, 0x55, 0xFF, 0x00, 0xAA, 0x55, 0xFF, 0x00, 0xAA, 0x55, 0xFF, 0x00, 0xAA, 0x55,
+            0xFF, 0x00, 0xAA, 0x55, 0x00, 0xFF, 0x55, 0xAA, 0x00, 0xFF, 0x55, 0xAA, 0x00, 0xFF,
+            0x55, 0xAA, 0x00, 0xFF, 0x55, 0xAA, 0x00, 0xFF, 0x55, 0xAA, 0x00, 0xFF, 0x55, 0xAA,
+            0x00, 0xFF, 0x55, 0xAA, 0x00, 0xFF, 0x55, 0xAA,
+        ];
+
+        if bus.read_blocks(&mut *self).await.is_ok() && &self.buf[..] == TUNING_PATTERN {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
 
 /// CMD19 — SEND_TUNING_BLOCK
-pub fn send_tuning_block(addr: u32) -> Cmd19 {
-    Cmd19 { addr }
+pub fn send_tuning_block(addr: u32, buf: &mut Aligned<A4, [u8; 64]>) -> Cmd19<'_> {
+    Cmd19 { addr, buf }
 }
 
 /// CMD20 — SPEED_CLASS_CONTROL
@@ -864,29 +901,22 @@ impl Acquirable for SdCard {
         freq: u32,
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
+        let mut buf = Aligned([0u8; 64]);
+        // Note: Bus starts at 400kHz
 
-        // Get the bus width configured in the Sdmmc peripheral
-        let configured_bus_width = match bus.bus.supports_bus_width() {
+        // Determine peripheral-configured bus width
+        let bus_width = match bus.bus.supports_bus_width() {
             BusWidth::W8 => return Err(MmcError::Unsupported),
-            bus_width => bus_width,
+            w => w,
         };
 
-        // Check if cards supports CMD8 (with pattern)
+        // CMD8 — check voltage + pattern
         let cic: CIC = bus.send_command(send_if_cond(1, 0xAA), false).await?.into();
-
-        if cic.check_pattern != 0xAA {
+        if cic.check_pattern != 0xAA || (cic.voltage & 1) == 0 {
             return Err(MmcError::Unsupported);
         }
 
-        if cic.voltage & 1 == 0 {
-            return Err(MmcError::Unsupported);
-        }
-
-        // Only request the 1.8V switch (S18A bit on ACMD41) when the
-        // host actually has a level-shifter pin to drive — otherwise
-        // a UHS-capable card may enter a partly-switched state when
-        // we never follow up with CMD11. v1/v2 builds always read
-        // `false` here (`has_vswitch` is hard-coded false).
+        // ACMD41 — negotiate OCR (with S18A if host supports 1.8V)
         this.ocr = bus
             .get_ocr(
                 &sd_send_op_cond(true, false, bus.bus.supports_1v8(), 1 << 5),
@@ -894,13 +924,9 @@ impl Acquirable for SdCard {
             )
             .await?;
 
+        // SPI mode fallback
         if !bus.bus.supports_mmc() {
-            // SPI mode
             this.ocr = bus.send_command(read_ocr(), false).await?.into();
-
-            //
-            // Switch to requested frequency
-            //
             bus.bus.set_bus(BusWidth::W1, freq)?;
 
             return Ok(this);
@@ -912,35 +938,34 @@ impl Acquirable for SdCard {
         // to "identification" state). CMD11 is only honoured by the
         // card while it's in the ready state. Doing the switch later
         // (e.g. after CMD2/CMD3) makes CMD11 time out.
-        //
-        // Only attempt if BOTH the host has a level-shifter pin AND
-        // the card accepted the S18A request (ocr.v18_allowed()). On
-        // failure, fall through to 3.3V HS — `voltage_switch()`
-        // already restored peripheral + GPIO state.
         if bus.bus.supports_1v8() && this.ocr.v18_allowed() {
             bus.send_command(voltage_switch(), false).await?;
         }
 
+        // CMD2 — read CID
         this.cid = bus
             .send_command(common::all_send_cid(), false)
             .await?
             .into();
 
+        // CMD3 — get RCA
         bus.rca =
             RCA::<SD>::from(bus.send_command(send_relative_address(), false).await?).address();
 
+        // CMD9 — read CSD (must be ≤25 MHz, 1-bit)
         this.csd = bus
             .send_command(common::send_csd(bus.rca), false)
             .await?
             .into();
 
+        // CMD7 — select card
         bus.select_card(Some(bus.rca)).await?;
 
+        // ACMD51 — read SCR (must be ≤25 MHz, 1-bit)
         bus.read_blocks(sd::send_scr(&mut this.scr), true).await?;
 
-        // Select bus width based on Sdmmc configuration and card capability
-        // Use 4-bit only if both the peripheral is configured for it AND the card supports it
-        let (bus_width, acmd_arg) = match configured_bus_width {
+        // ACMD6 — set bus width BEFORE high-speed signalling switch
+        let (bus_width, acmd_arg) = match bus_width {
             BusWidth::W4 if this.scr.bus_width_four() => (BusWidth::W4, 2),
             _ => (BusWidth::W1, 0),
         };
@@ -948,14 +973,9 @@ impl Acquirable for SdCard {
         bus.send_command(set_bus_width(acmd_arg == 2), true).await?;
 
         // Up to 25Mhz
-        bus.bus.set_bus(bus_width, freq.clamp(0, 25_000_000))?;
-
-        // Read status
-        bus.read_blocks(sd::sd_status(&mut this.status), true)
-            .await?;
+        bus.bus.set_bus(bus_width, freq.min(25_000_000))?;
 
         if freq > 25_000_000 {
-            // SDR104 needs DLYB tap tuning; SDR50 also accepts CKIN feedback. Below 50 MHz we cap at SDR25/HS.
             let request = if freq > 100_000_000 {
                 Signalling::SDR104
             } else if freq > 50_000_000 {
@@ -964,15 +984,19 @@ impl Acquirable for SdCard {
                 Signalling::SDR25
             };
 
-            if request == Self::switch_signalling_mode(bus, request).await? {
-                // Up to max_f
+            if request == Self::switch_signalling_mode(bus, &mut buf, request).await? {
+                // Increase clock to target
                 bus.bus.set_bus(bus_width, freq)?;
 
-                let status_cmd = common::card_status(bus.rca, false);
+                bus.bus
+                    .tune_bus(bus_width, freq, &mut send_tuning_block(0, &mut buf))
+                    .await?;
 
-                bus.bus.tune_bus(bus_width, freq, &status_cmd).await?;
-
-                if CardStatus::<SD>::from(bus.send_command(&status_cmd, false).await?).state()
+                if CardStatus::<SD>::from(
+                    bus.send_command(common::card_status(bus.rca, false), false)
+                        .await?,
+                )
+                .state()
                     != CurrentState::Transfer
                 {
                     return Err(MmcError::SignalingSwitchFailed);
@@ -982,11 +1006,11 @@ impl Acquirable for SdCard {
             }
         }
 
-        // Read status after signalling change
+        // ACMD13 — SD Status (after signalling switch)
         bus.read_blocks(sd::sd_status(&mut this.status), true)
             .await?;
 
-        // Set block size once
+        // CMD16 — set block length
         bus.send_command(set_block_length(block_size.len() as u32), false)
             .await?
             .to_result()?;
@@ -1005,6 +1029,7 @@ impl SdCard {
     /// SD only.
     async fn switch_signalling_mode<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
+        buf: &mut Aligned<A4, [u8; 64]>,
         signalling: Signalling,
     ) -> Result<Signalling, MmcError> {
         // NB PLSS v7_10 4.3.10.4: "the use of SET_BLK_LEN command is not
@@ -1020,9 +1045,7 @@ impl SdCard {
                 Signalling::SDR12 => 0xFF_FF00,
             };
 
-        let mut buf = Aligned([0u8; 64]);
-
-        bus.read_blocks(cmd6(set_function, &mut buf), false).await?;
+        bus.read_blocks(cmd6(set_function, buf), false).await?;
 
         // Host is allowed to use the new functions at least 8
         // clocks after the end of the switch command
