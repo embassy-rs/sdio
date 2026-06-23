@@ -953,7 +953,11 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             _ => block_idx,
         };
 
-        // CMD23 support is disalbed until a reliable detection method is implemented
+        if self.info.supports_cmd23() {
+            self.bus
+                .send_command(sd::set_block_count(blocks.len() as u32), true)
+                .await?;
+        }
 
         if self.info.supports_acmd23() {
             self.bus
@@ -965,7 +969,9 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             .write_blocks(write_multiple_blocks(addr, blocks), false)
             .await?;
 
-        self.bus.send_command(stop_transmission(), false).await?;
+        if !self.info.supports_cmd23() {
+            self.bus.send_command(stop_transmission(), false).await?;
+        }
 
         Ok(())
     }

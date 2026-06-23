@@ -886,7 +886,8 @@ impl Addressable for SdCard {
     }
 
     fn supports_cmd23(&self) -> bool {
-        self.csd.supports_cmd23()
+        // CMD23 support is disalbed until a reliable detection method is implemented
+        false
     }
 
     fn supports_acmd23(&self) -> bool {
