@@ -6,8 +6,8 @@ use core::fmt::Debug;
 use aligned::{A4, Aligned};
 
 use crate::{
-    BlockCommand, BlockReadCommand, BlockWriteCommand, Command, ControlCommand, R1, R1b, R2, R3,
-    R4, R6,
+    BlockCommand, BlockReadCommand, BlockWriteCommand, Command, ControlCommand, R0, R1, R1b, R2,
+    R3, R4, R6,
 };
 
 // ============================================================================
@@ -19,7 +19,7 @@ pub struct Cmd0;
 
 impl Command for Cmd0 {
     const INDEX: u8 = 0;
-    type Resp<'a> = R1;
+    type Resp<'a> = R0;
     fn arg(&self) -> u32 {
         0
     }
@@ -29,6 +29,23 @@ impl ControlCommand for Cmd0 {}
 /// CMD0 — GO_IDLE_STATE
 pub fn idle() -> Cmd0 {
     Cmd0
+}
+
+/// CMD0 — GO_IDLE_STATE (SPI)
+pub struct Cmd0S;
+
+impl Command for Cmd0S {
+    const INDEX: u8 = 0;
+    type Resp<'a> = R1;
+    fn arg(&self) -> u32 {
+        0
+    }
+}
+impl ControlCommand for Cmd0S {}
+
+/// CMD0 — GO_IDLE_STATE
+pub fn idle_spi() -> Cmd0S {
+    Cmd0S
 }
 
 /// CMD2 — ALL_SEND_CID

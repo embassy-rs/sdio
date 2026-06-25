@@ -333,6 +333,19 @@ impl<T: MmcBus> MmcBus for &mut T {
     }
 }
 
+/// R1 — Zero response
+pub struct R0;
+
+impl Response for R0 {
+    const CRC: bool = false;
+    const LEN: ResponseLen = ResponseLen::Zero;
+    const BUSY: bool = false;
+
+    fn from_words(_buf: &[u32; 4]) -> Self {
+        Self
+    }
+}
+
 /// R1 — Normal status response
 ///
 /// 48-bit, CRC-checked, no busy
@@ -691,7 +704,11 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
         // Wait 74 cycles
         self.delay.delay_us(74_000_000 / INIT_FREQ).await;
 
-        self.send_command(common::idle(), false).await?;
+        if self.bus.supports_mmc() {
+            self.send_command(common::idle(), false).await?;
+        } else {
+            self.send_command(common::idle_spi(), false).await?;
+        }
 
         Ok(())
     }
