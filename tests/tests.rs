@@ -642,3 +642,74 @@ fn test_fbr_base_maps_function_to_its_own_block() {
     // FN1's block-size register must never collide with FN2's base.
     assert!(fbr_block_size_high(1) < fbr_base(2));
 }
+
+// ---------------------------------------------------------------------------
+// SD Status (SSR) field decoding — PLSS v7_10 §4.10.2, Table 4-44.
+//
+// The SSR is 512 bits, transmitted MSB first, so byte 0 = bits [511:504] and
+// byte b = bits [511-8b : 504-8b].
+// ---------------------------------------------------------------------------
+#[test]
+fn test_sd_status_decodes_all_fields() {
+    let mut raw = [0u8; 64];
+
+    raw[0] = 0xA0; // DAT_BUS_WIDTH=0b10 (4-bit) [511:510], SECURED_MODE=1 [509]
+    raw[2] = 0x12; // SD_CARD_TYPE [495:480] = 0x1234
+    raw[3] = 0x34;
+    raw[4] = 0xDE; // SIZE_OF_PROTECTED_AREA [479:448] = 0xDEADBEEF
+    raw[5] = 0xAD;
+    raw[6] = 0xBE;
+    raw[7] = 0xEF;
+    raw[8] = 0x04; // SPEED_CLASS [447:440] (Class 10)
+    raw[9] = 0x10; // PERFORMANCE_MOVE [439:432] = 16 MB/s
+    raw[10] = 0x90; // AU_SIZE [431:428] = 9 (top nibble of byte 10)
+    raw[11] = 0x12; // ERASE_SIZE [423:408] = 0x1234
+    raw[12] = 0x34;
+    raw[13] = 0x30; // ERASE_TIMEOUT [407:402] = 0x0C (top 6 bits of byte 13)
+    raw[15] = 0x1E; // VIDEO_SPEED_CLASS [391:384] = V30
+    raw[21] = 0x02; // APP_PERF_CLASS [339:336] = A2 (low nibble of byte 21)
+    raw[24] = 0x02; // DISCARD_SUPPORT [313] = bit 1 of byte 24
+
+    let ssr = SDStatus::from(raw);
+
+    assert!(matches!(ssr.bus_width(), Some(BusWidth::W4)));
+    assert!(ssr.secure_mode());
+    assert_eq!(ssr.sd_memory_card_type(), 0x1234);
+    assert_eq!(ssr.protected_area_size(), 0xDEAD_BEEF);
+    assert_eq!(ssr.speed_class(), 0x04);
+    assert_eq!(ssr.move_performance(), 0x10);
+    assert_eq!(ssr.allocation_unit_size(), 0x9);
+    assert_eq!(ssr.erase_size(), 0x1234);
+    assert_eq!(ssr.erase_timeout(), 0x0C);
+    assert_eq!(ssr.video_speed_class(), 0x1E);
+    assert_eq!(ssr.app_perf_class(), 0x2);
+    assert!(ssr.discard_support());
+}
+
+// ---------------------------------------------------------------------------
+// SCR field decoding — PLSS v7_10 §5.6, Table 5-17.
+//
+// SCR is 64 bits, bit 63 = byte 0 bit 7.
+// ---------------------------------------------------------------------------
+#[test]
+fn test_scr_decodes_all_fields() {
+    use sdio::sd::{SCR, SDEraseDataStatus, SDSecurity, SDSpecVersion};
+
+    //   SD_SPEC       [59:56] = 2, SD_SPEC3 [47] = 1 -> SDSpecVersion::V3
+    //   DATA_STAT_AFTER_ERASE [55] = 0
+    //   SD_SECURITY   [54:52] = 4 (SDXC)              -> byte1 = 0b0_100_0101 = 0x45
+    //   SD_BUS_WIDTHS [51:48] = 5 (1-bit + 4-bit)
+    //   CMD_SUPPORT   [35:32] = 0b1111 (CMD20/23/48/49/58/59) -> byte3 = 0x0F
+    let scr = SCR::from([0x02, 0x45, 0x80, 0x0F, 0x00, 0x00, 0x00, 0x00]);
+
+    assert_eq!(scr.version(), SDSpecVersion::V3);
+    assert_eq!(scr.security(), SDSecurity::Unknown(4));
+    assert_eq!(scr.data_after_erase(), SDEraseDataStatus::Zero);
+    assert_eq!(scr.bus_widths(), 0x5);
+    assert!(scr.bus_width_one());
+    assert!(scr.bus_width_four());
+    assert!(scr.supports_cmd20());
+    assert!(scr.supports_acmd23());
+    assert!(scr.supports_cmd48());
+    assert!(scr.supports_cmd49());
+}

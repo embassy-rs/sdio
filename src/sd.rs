@@ -484,7 +484,7 @@ impl SCR {
 
     /// SD Security Version
     pub fn security(&self) -> SDSecurity {
-        let val = ((self.inner_word() >> 56) & 0xF) as u8;
+        let val = ((self.inner_word() >> 52) & 0x7) as u8;
         match val {
             0 => SDSecurity::None,
             1 => SDSecurity::V1,
@@ -495,7 +495,7 @@ impl SCR {
     }
 
     pub fn data_after_erase(&self) -> SDEraseDataStatus {
-        let val = ((self.inner_word() >> 54) & 0x3) as u8;
+        let val = ((self.inner_word() >> 55) & 0x1) as u8;
         match val {
             0 => SDEraseDataStatus::Zero,
             1 => SDEraseDataStatus::Ones,
@@ -537,9 +537,9 @@ impl SCR {
         (self.inner_word() >> 50) & 1 != 0
     }
 
-    /// Returns the 2-bit Command Support field (SCR[33:32])
+    /// Returns the 4-bit Command Support field (SCR[35:32])
     fn command_support(&self) -> u8 {
-        ((self.inner_word() >> 32) as u8) & 0x3
+        ((self.inner_word() >> 32) as u8) & 0xF
     }
 
     /// CMD20 supported
@@ -842,7 +842,7 @@ impl SDStatus {
 
     /// Read a 32‑bit big‑endian word from the SD Status structure.
     ///
-    /// WORD0 = bytes 0..4  
+    /// WORD0 = bytes 0..4
     /// WORD15 = bytes 60..64
     #[inline]
     fn word(&self, index: usize) -> u32 {
@@ -903,17 +903,17 @@ impl SDStatus {
 
     /// Video Speed Class (V6, V10, V30, etc)
     pub fn video_speed_class(&self) -> u8 {
-        (self.word(4) & 0xFF) as u8
+        (self.word(3) & 0xFF) as u8
     }
 
     /// Application Performance Class (A1, A2)
     pub fn app_perf_class(&self) -> u8 {
-        ((self.word(6) >> 16) & 0xF) as u8
+        ((self.word(5) >> 16) & 0xF) as u8
     }
 
     /// Discard/TRIM support
     pub fn discard_support(&self) -> bool {
-        (self.word(7) & 0x0200_0000) != 0
+        (self.word(6) & 0x0200_0000) != 0
     }
 }
 
