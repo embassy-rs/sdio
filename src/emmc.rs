@@ -429,51 +429,49 @@ impl ExtCSD {
         }
     }
 
+    /// Read the little-endian 32-bit word at byte offset `i * 4`.
     fn inner_word(&self, i: usize) -> u32 {
         u32::from_le_bytes(self.inner[i * 4..i * 4 + 4].try_into().unwrap())
     }
 
+    /// Read the single byte at EXT_CSD offset `i`.
+    fn byte(&self, i: usize) -> u8 {
+        self.inner[i]
+    }
+
     pub fn boot_info(&self) -> u8 {
-        // byte 228
-        (self.inner_word(57) >> 24) as u8
+        self.byte(228)
     }
     pub fn sleep_awake_timeout(&self) -> u8 {
-        // byte 217
-        (self.inner_word(54) >> 16) as u8
+        self.byte(217)
     }
     pub fn sleep_notification_time(&self) -> u8 {
-        // byte 216
-        (self.inner_word(54) >> 24) as u8
+        self.byte(216)
     }
     pub fn sector_count(&self) -> u32 {
-        // bytes [215:212]
+        // bytes [215:212], little-endian
         self.inner_word(53)
     }
     pub fn driver_strength(&self) -> u8 {
-        // byte 197
-        (self.inner_word(49) >> 16) as u8
+        self.byte(197)
     }
     pub fn card_type(&self) -> u8 {
-        // byte 196
-        (self.inner_word(49) >> 24) as u8
+        self.byte(196)
     }
     pub fn csd_structure_version(&self) -> u8 {
-        // byte 194
-        (self.inner_word(48) >> 8) as u8
+        self.byte(194)
     }
     pub fn extended_csd_revision(&self) -> u8 {
-        // byte 192
-        (self.inner_word(48) >> 24) as u8
+        self.byte(192)
     }
     pub fn data_sector_size(&self) -> u8 {
-        // byte 61
-        (self.inner_word(15) >> 16) as u8
+        self.byte(61)
     }
     pub fn secure_removal_type(&self) -> u8 {
-        // byte 16
-        (self.inner_word(4) >> 24) as u8
+        self.byte(16)
     }
 }
+
 impl fmt::Debug for ExtCSD {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Extended CSD")

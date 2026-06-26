@@ -713,3 +713,45 @@ fn test_scr_decodes_all_fields() {
     assert!(scr.supports_cmd48());
     assert!(scr.supports_cmd49());
 }
+
+// ---------------------------------------------------------------------------
+// EXT_CSD field decoding — JEDEC JESD84-B51 §7.4.
+//
+// EXT_CSD is a 512-byte register; each field lives at a fixed byte offset.
+// Multi-byte fields (e.g. SEC_COUNT) are little-endian.
+// ---------------------------------------------------------------------------
+#[test]
+fn test_ext_csd_decodes_all_fields() {
+    use sdio::emmc::ExtCSD;
+
+    let mut raw = [0u8; 512];
+
+    raw[16] = 0x21; // SECURE_REMOVAL_TYPE
+    raw[61] = 0x01; // DATA_SECTOR_SIZE
+    raw[192] = 0x08; // EXT_CSD_REV
+    raw[194] = 0x02; // CSD_STRUCTURE
+    raw[196] = 0x57; // CARD_TYPE
+    raw[197] = 0x1F; // DRIVER_STRENGTH
+    raw[212] = 0x78; // SEC_COUNT [215:212], little-endian = 0x12345678
+    raw[213] = 0x56;
+    raw[214] = 0x34;
+    raw[215] = 0x12;
+    raw[216] = 0x0A; // SLEEP_NOTIFICATION_TIME
+    raw[217] = 0x13; // S_A_TIMEOUT
+    raw[228] = 0x07; // BOOT_INFO
+
+    let ext = ExtCSD {
+        inner: Aligned(raw),
+    };
+
+    assert_eq!(ext.secure_removal_type(), 0x21);
+    assert_eq!(ext.data_sector_size(), 0x01);
+    assert_eq!(ext.extended_csd_revision(), 0x08);
+    assert_eq!(ext.csd_structure_version(), 0x02);
+    assert_eq!(ext.card_type(), 0x57);
+    assert_eq!(ext.driver_strength(), 0x1F);
+    assert_eq!(ext.sector_count(), 0x1234_5678);
+    assert_eq!(ext.sleep_notification_time(), 0x0A);
+    assert_eq!(ext.sleep_awake_timeout(), 0x13);
+    assert_eq!(ext.boot_info(), 0x07);
+}
