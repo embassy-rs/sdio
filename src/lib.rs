@@ -26,6 +26,7 @@ pub mod spi;
 const INIT_FREQ: u32 = 400_000;
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MmcError {
     Timeout,
     Crc,
@@ -38,6 +39,7 @@ pub enum MmcError {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BusWidth {
     W1,
     W4,
@@ -45,6 +47,7 @@ pub enum BusWidth {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ResponseLen {
     Zero,
     R48,

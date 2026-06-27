@@ -18,6 +18,7 @@ aligned = "0.4.3"
 block-device-driver = "0.2.0"
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
+defmt = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
