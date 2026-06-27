@@ -433,10 +433,26 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
         // Go.
         self.bus.init_idle().await?;
 
-        // Get IO OCR
+        // CMD5 inquiry (arg = 0): the card reports the voltage window it
+        // supports but does not begin powering up.
+        let inquiry: OCR<SDIO> = self
+            .bus
+            .send_command(io_send_op_cond(false, 0x0), false)
+            .await?
+            .into();
+
+        // Power-up: re-issue CMD5 with a non-empty voltage window until the
+        // card clears its busy (C) bit. Requesting an empty window (arg = 0)
+        // here means the card never powers up, so this would loop until it
+        // times out. Fall back to the full range if the inquiry came back
+        // empty.
+        let mut window = ((inquiry.0 >> 15) & 0x1FF) as u16;
+        if window == 0 {
+            window = 0x1FF;
+        }
         self.ocr = self
             .bus
-            .get_ocr(&io_send_op_cond(false, 0x0), false)
+            .get_ocr(&io_send_op_cond(false, window), false)
             .await?;
 
         // UDB-based SDIO does not support io volt switch sequence
