@@ -5,6 +5,7 @@
 use core::{fmt, mem, slice};
 
 use aligned::{A4, Aligned};
+use block_device_driver::{slice_to_blocks, slice_to_blocks_mut};
 use embedded_hal_async::delay::DelayNs;
 
 use crate::{
@@ -394,28 +395,6 @@ impl From<R5> for SdioResponse {
     }
 }
 
-fn to_blocks<const BLOCK_SIZE: usize>(
-    bytes: &Aligned<A4, [u8]>,
-) -> &[Aligned<A4, [u8; BLOCK_SIZE]>] {
-    assert!(bytes.len().is_multiple_of(BLOCK_SIZE));
-
-    let ptr = bytes.as_ptr() as *const Aligned<A4, [u8; BLOCK_SIZE]>;
-    let len = bytes.len() / BLOCK_SIZE;
-
-    unsafe { core::slice::from_raw_parts(ptr, len) }
-}
-
-fn to_blocks_mut<const BLOCK_SIZE: usize>(
-    bytes: &mut Aligned<A4, [u8]>,
-) -> &mut [Aligned<A4, [u8; BLOCK_SIZE]>] {
-    assert!(bytes.len().is_multiple_of(BLOCK_SIZE));
-
-    let ptr = bytes.as_mut_ptr() as *mut Aligned<A4, [u8; BLOCK_SIZE]>;
-    let len = bytes.len() / BLOCK_SIZE;
-
-    unsafe { core::slice::from_raw_parts_mut(ptr, len) }
-}
-
 /// SDIO Interface
 pub struct SdioCard<B: MmcBus, D: DelayNs> {
     bus: BusAdapter<B, D>,
@@ -702,18 +681,20 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
         let block_part = buf.len() - byte_part;
 
         if block_part > 0 {
-            let buf = &mut buf[..block_part];
-
-            self.cmd53_read_blocks(func, true, addr, to_blocks_mut::<BLOCK_SIZE>(buf))
-                .await?;
+            self.cmd53_read_blocks(
+                func,
+                true,
+                addr,
+                slice_to_blocks_mut::<A4, BLOCK_SIZE>(&mut buf[..block_part]),
+            )
+            .await?;
 
             addr += block_part as u32;
         }
 
         if byte_part > 0 {
-            let buf = &mut buf[block_part..];
-
-            self.cmd53_read_bytes(func, true, addr, buf).await?;
+            self.cmd53_read_bytes(func, true, addr, &mut buf[block_part..])
+                .await?;
         }
 
         Ok(())
@@ -771,18 +752,20 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
         let block_part = buf.len() - byte_part;
 
         if block_part > 0 {
-            let buf = &buf[..block_part];
-
-            self.cmd53_write_blocks(func, true, addr, to_blocks::<BLOCK_SIZE>(buf))
-                .await?;
+            self.cmd53_write_blocks(
+                func,
+                true,
+                addr,
+                slice_to_blocks::<A4, BLOCK_SIZE>(&buf[..block_part]),
+            )
+            .await?;
 
             addr += block_part as u32;
         }
 
         if byte_part > 0 {
-            let buf = &buf[block_part..];
-
-            self.cmd53_write_bytes(func, true, addr, buf).await?;
+            self.cmd53_write_bytes(func, true, addr, &buf[block_part..])
+                .await?;
         }
 
         Ok(())

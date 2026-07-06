@@ -606,6 +606,10 @@ impl Response for R5 {
 /// Bus Tuning Operation
 pub trait TuningOp {
     /// Execute the operation. If error, abort the operation and return.
+    ///
+    /// Otherwise:
+    ///     - If `Ok(true)`, the tap is considered acceptable
+    ///     - If `Ok(false)`, the tap is not considered acceptable.
     fn exec<B: MmcBus>(&mut self, bus: &mut B) -> impl Future<Output = Result<bool, MmcError>>;
 }
 
@@ -828,9 +832,11 @@ pub enum Signalling {
 
 /// Represents either an SD or EMMC card
 trait Acquirable: Sized + Clone + Default {
+    // Acquire a storage device from an initialized idle bus
     fn acquire<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
         block_size: BlockSize,
+        bus_width: BusWidth,
         freq: u32,
     ) -> impl Future<Output = Result<Self, MmcError>>;
 }
@@ -884,9 +890,10 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
     pub async fn reacquire(&mut self, freq: u32) -> Result<(), MmcError> {
         // Clamp the frequency to the supported bus frequency.
         let freq = freq.clamp(0, self.bus.bus.supports_frequency());
+        let bus_width = self.bus.bus.supports_bus_width();
 
         self.bus.init_idle().await?;
-        self.info = A::acquire(&mut self.bus, block_size(BLOCK_SIZE), freq).await?;
+        self.info = A::acquire(&mut self.bus, block_size(BLOCK_SIZE), bus_width, freq).await?;
 
         Ok(())
     }

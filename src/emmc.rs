@@ -539,6 +539,7 @@ impl Acquirable for Emmc {
     async fn acquire<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
         block_size: BlockSize,
+        bus_width: BusWidth,
         freq: u32,
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
@@ -547,9 +548,6 @@ impl Acquirable for Emmc {
             // eMMC requires 512 block size
             return Err(MmcError::Other);
         }
-
-        // Get the bus width configured in the Sdmmc peripheral
-        let bus_width = bus.bus.supports_bus_width();
 
         let high_voltage = 0b0 << 7;
         let access_mode = 0b10 << 29;

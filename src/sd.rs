@@ -1009,17 +1009,15 @@ impl Acquirable for Card {
     async fn acquire<B: MmcBus, D: DelayNs>(
         bus: &mut BusAdapter<B, D>,
         block_size: BlockSize,
+        bus_width: BusWidth,
         freq: u32,
     ) -> Result<Self, MmcError> {
         let mut this = Self::default();
         let mut buf = Aligned([0u8; 64]);
-        // Note: Bus starts at 400kHz
 
-        // Determine peripheral-configured bus width
-        let bus_width = match bus.bus.supports_bus_width() {
-            BusWidth::W8 => return Err(MmcError::Unsupported),
-            w => w,
-        };
+        if matches!(bus_width, BusWidth::W8) {
+            return Err(MmcError::Unsupported);
+        }
 
         // CMD8 — check voltage + pattern
         let cic: CIC = bus.send_command(send_if_cond(1, 0xAA), false).await?;
