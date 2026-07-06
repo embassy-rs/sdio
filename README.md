@@ -57,9 +57,12 @@ pub trait MmcBus {
         C: BlockReadCommand + 'a;
 
     /// Write N blocks of fixed size (CMD24, CMD25, CMD53 block mode).
+    ///
+    /// If called with auto_stop set to true, CMD12 must be issued after completing this command.
     fn write_blocks<'a, C>(
         &mut self,
         cmd: C,
+        auto_stop: bool,
     ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
     where
         C: BlockWriteCommand + 'a;
@@ -106,6 +109,11 @@ pub trait MmcBus {
 
     /// Optional: whether the host supports native MMC mode. Otherwise, SPI mode is used.
     fn supports_mmc(&self) -> bool {
+        false
+    }
+
+    /// Optional: whether the host supports the 'auto stop' feature.
+    fn supports_auto_stop(&self) -> bool {
         false
     }
 
