@@ -953,6 +953,8 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
             .await?
             .to_result()?;
 
+        self.bus.send_command(stop_transmission(), false).await?;
+
         Ok(())
     }
 
