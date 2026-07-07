@@ -211,10 +211,18 @@ where
         Ok(resp)
     }
 
-    async fn read_blocks<'a, C>(&mut self, mut cmd: C) -> Result<C::Resp<'a>, MmcError>
+    async fn read_blocks<'a, C>(
+        &mut self,
+        mut cmd: C,
+        auto_stop: bool,
+    ) -> Result<C::Resp<'a>, MmcError>
     where
         C: BlockReadCommand + 'a,
     {
+        if auto_stop {
+            return Err(MmcError::Unsupported);
+        }
+
         self.send_cmd_header(&cmd).await?;
         let block_size = cmd.block_size().len();
         let total = block_size * cmd.block_count() as usize;

@@ -639,12 +639,15 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
     ) -> Result<(), MmcError> {
         self.bus
             .bus
-            .read_blocks(Cmd53BlockRead {
-                function,
-                increment,
-                addr,
-                buf,
-            })
+            .read_blocks(
+                Cmd53BlockRead {
+                    function,
+                    increment,
+                    addr,
+                    buf,
+                },
+                false,
+            )
             .await?
             .to_result()
     }

@@ -217,12 +217,17 @@ impl MmcBus for DummyMmcBus {
     fn read_blocks<'a, C>(
         &mut self,
         mut cmd: C,
+        auto_stop: bool,
     ) -> impl Future<Output = Result<C::Resp<'a>, MmcError>>
     where
         C: BlockReadCommand + 'a,
     {
         let state = self.state.clone();
         async move {
+            if auto_stop {
+                return Err(MmcError::Unsupported);
+            }
+
             let mut st = state.lock().unwrap();
             DummyMmcBus::wait_busy_if_needed::<C::Resp<'_>>(&mut st)?;
 
