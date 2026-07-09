@@ -352,6 +352,7 @@ impl Response for R0 {
     const LEN: ResponseLen = ResponseLen::Zero;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(_buf: &[u32; 4]) -> Self {
         Self
     }
@@ -422,6 +423,7 @@ impl Response for R1 {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         R1 { status: buf[0] }
     }
@@ -449,6 +451,7 @@ impl Response for R1b {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = true;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         R1b { status: buf[0] }
     }
@@ -466,6 +469,7 @@ impl Response for R2 {
     const LEN: ResponseLen = ResponseLen::R136;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         R2 {
             words: [buf[0], buf[1], buf[2], buf[3]],
@@ -486,6 +490,7 @@ impl Response for R3 {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         R3 { ocr: buf[0] }
     }
@@ -504,6 +509,7 @@ impl Response for R6 {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         let v = buf[0];
         R6 {
@@ -526,6 +532,7 @@ impl Response for R7 {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         let v = buf[0];
         R7 {
@@ -552,6 +559,7 @@ impl Response for R4 {
     const LEN: ResponseLen = ResponseLen::R48;
     const BUSY: bool = false;
 
+    #[inline]
     fn from_words(buf: &[u32; 4]) -> Self {
         R4 { ocr: buf[0] }
     }
