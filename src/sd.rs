@@ -1018,13 +1018,13 @@ impl Acquirable for Card {
         let mut buf = Aligned([0u8; 64]);
 
         if matches!(bus_width, BusWidth::W8) {
-            return Err(MmcError::Unsupported);
+            return Err(MmcError::BusWidth);
         }
 
         // CMD8 — check voltage + pattern
         let cic: CIC = bus.send_command(send_if_cond(1, 0xAA), false).await?;
         if cic.check_pattern != 0xAA || (cic.voltage & 1) == 0 {
-            return Err(MmcError::Unsupported);
+            return Err(MmcError::Voltage);
         }
 
         // ACMD41 — negotiate OCR (with S18A if host supports 1.8V)
@@ -1111,10 +1111,10 @@ impl Acquirable for Card {
                 .state()
                     != CurrentState::Transfer
                 {
-                    return Err(MmcError::SignalingSwitchFailed);
+                    return Err(MmcError::Signaling);
                 }
             } else {
-                return Err(MmcError::SignalingSwitchFailed);
+                return Err(MmcError::Signaling);
             }
         }
 
@@ -1176,7 +1176,7 @@ impl Card {
             2 => Ok(Signalling::SDR50),
             3 => Ok(Signalling::SDR104),
             4 => Ok(Signalling::DDR50),
-            _ => Err(MmcError::Unsupported),
+            _ => Err(MmcError::Signaling),
         }
     }
 }

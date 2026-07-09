@@ -25,7 +25,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo
       - name: Run check
-        run: cargo check
+        run: cargo check --features defmt
       - name: Run tests
         run: cargo test
       - name: Check fmt

@@ -545,8 +545,7 @@ impl Acquirable for Emmc {
         let mut this = Self::default();
 
         if block_size.len() != 512 {
-            // eMMC requires 512 block size
-            return Err(MmcError::Other);
+            return Err(MmcError::BlockSize);
         }
 
         let high_voltage = 0b0 << 7;

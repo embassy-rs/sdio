@@ -6,7 +6,7 @@ use sdio::common::{BlockSize, CSD, OCR, RCA};
 use sdio::emmc::EMMC;
 use sdio::sd::{Card, SD, SDStatus};
 use sdio::{
-    BlockReadCommand, BlockWriteCommand, BusWidth, ByteReadCommand, ByteWriteCommand,
+    BlockReadCommand, BlockWriteCommand, BusWidth, ByteReadCommand, ByteWriteCommand, CardError,
     ControlCommand, MmcBus, MmcError, R3, R6, Response,
 };
 
@@ -196,7 +196,7 @@ impl MmcBus for DummyMmcBus {
                 11 => {
                     // CMD11: VOLTAGE_SWITCH
                     if !st.ready {
-                        return Err(MmcError::SignalingSwitchFailed);
+                        return Err(MmcError::Signaling);
                     }
                     st.set_busy(2);
                     Ok(DummyMmcBus::make_response([0, 0, 0, 0]))
@@ -208,7 +208,7 @@ impl MmcBus for DummyMmcBus {
                 }
                 _ => {
                     println!("unsupported cmd: {}", C::INDEX);
-                    Err(MmcError::IllegalCommand)
+                    Err(MmcError::Card(CardError::IllegalCommand))
                 }
             }
         }

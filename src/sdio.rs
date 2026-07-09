@@ -574,9 +574,9 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
                 false,
             )
             .await?;
-        if resp.is_error() {
-            return Err(MmcError::Other);
-        }
+
+        resp.to_result()?;
+
         Ok(resp.data)
     }
 
@@ -595,9 +595,9 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
                 false,
             )
             .await?;
-        if resp.is_error() {
-            return Err(MmcError::Other);
-        }
+
+        resp.to_result()?;
+
         Ok(())
     }
 
@@ -621,9 +621,9 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
                 false,
             )
             .await?;
-        if resp.is_error() {
-            return Err(MmcError::Other);
-        }
+
+        resp.to_result()?;
+
         Ok(resp.data)
     }
 

@@ -25,16 +25,30 @@ pub mod spi;
 
 const INIT_FREQ: u32 = 400_000;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
 pub enum MmcError {
     Timeout,
+    /// CRC error.
     Crc,
-    IllegalCommand,
     Busy,
+    /// Hardware I/O error
     Io,
-    SignalingSwitchFailed,
+    /// Invalid block size
+    BlockSize,
+    /// Signaling switch failed
+    Signaling,
+    /// Unsupported bus witdth
+    BusWidth,
+    /// Unsupported voltage
+    Voltage,
+    /// Unsupported card type
+    CardType,
+    /// Bus feature is not supported
     Unsupported,
+    Card(CardError),
+    Sdio(SdioError),
     Other,
 }
 
@@ -400,20 +414,90 @@ pub enum CardState {
     Reserved(u8), // 8–15
 }
 
-impl R1 {
-    /// Error bits defined in the SD Physical Spec §4.10.1 (Table 4-41).
-    pub const ERR_MASK: u32 = 0xFDF9_8008;
+/// Error bits defined in SD Physical Spec §4.10.1 (Table 4-41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum CardError {
+    AddressError,
+    BlockLenError,
+    EraseSeqError,
+    EraseParamError,
+    WriteProtViolation,
+    LockUnlockFailed,
+    ComCrcError,
+    IllegalCommand,
+    CardEccFailed,
+    CcError,
+    Error,
+    CidCsdOverwrite,
+    WpEraseSkip,
+    EraseReset,
+}
 
-    pub fn to_result(&self) -> Result<(), MmcError> {
-        if self.is_error() {
-            Err(MmcError::Other)
-        } else {
-            Ok(())
+impl CardError {
+    pub const ADDRESS_ERROR: u32 = 1 << 31;
+    pub const BLOCK_LEN_ERROR: u32 = 1 << 30;
+    pub const ERASE_SEQ_ERROR: u32 = 1 << 29;
+    pub const ERASE_PARAM_ERROR: u32 = 1 << 28;
+    pub const WP_VIOLATION: u32 = 1 << 26;
+    pub const LOCK_UNLOCK_FAILED: u32 = 1 << 24;
+    pub const COM_CRC_ERROR: u32 = 1 << 23;
+    pub const ILLEGAL_COMMAND: u32 = 1 << 22;
+    pub const CARD_ECC_FAILED: u32 = 1 << 21;
+    pub const CC_ERROR: u32 = 1 << 20;
+    pub const ERROR: u32 = 1 << 19;
+    pub const CID_CSD_OVERWRITE: u32 = 1 << 16;
+    pub const WP_ERASE_SKIP: u32 = 1 << 15;
+    pub const ERASE_RESET: u32 = 1 << 13;
+
+    pub const ALL: u32 = Self::ADDRESS_ERROR
+        | Self::BLOCK_LEN_ERROR
+        | Self::ERASE_SEQ_ERROR
+        | Self::ERASE_PARAM_ERROR
+        | Self::WP_VIOLATION
+        | Self::LOCK_UNLOCK_FAILED
+        | Self::COM_CRC_ERROR
+        | Self::ILLEGAL_COMMAND
+        | Self::CARD_ECC_FAILED
+        | Self::CC_ERROR
+        | Self::ERROR
+        | Self::CID_CSD_OVERWRITE
+        | Self::WP_ERASE_SKIP
+        | Self::ERASE_RESET;
+
+    pub fn from_bits(bits: u32) -> Option<Self> {
+        let bits = bits & Self::ALL;
+        if bits == 0 {
+            return None;
+        }
+
+        // isolate lowest set bit
+        match bits & (!bits + 1) {
+            Self::ADDRESS_ERROR => Some(Self::AddressError),
+            Self::BLOCK_LEN_ERROR => Some(Self::BlockLenError),
+            Self::ERASE_SEQ_ERROR => Some(Self::EraseSeqError),
+            Self::ERASE_PARAM_ERROR => Some(Self::EraseParamError),
+            Self::WP_VIOLATION => Some(Self::WriteProtViolation),
+            Self::LOCK_UNLOCK_FAILED => Some(Self::LockUnlockFailed),
+            Self::COM_CRC_ERROR => Some(Self::ComCrcError),
+            Self::ILLEGAL_COMMAND => Some(Self::IllegalCommand),
+            Self::CARD_ECC_FAILED => Some(Self::CardEccFailed),
+            Self::CC_ERROR => Some(Self::CcError),
+            Self::ERROR => Some(Self::Error),
+            Self::CID_CSD_OVERWRITE => Some(Self::CidCsdOverwrite),
+            Self::WP_ERASE_SKIP => Some(Self::WpEraseSkip),
+            Self::ERASE_RESET => Some(Self::EraseReset),
+            _ => None, // unknown bit → treat as OK or handle differently
         }
     }
+}
 
-    pub fn is_error(&self) -> bool {
-        self.status & Self::ERR_MASK != 0
+impl R1 {
+    pub fn to_result(&self) -> Result<(), MmcError> {
+        match CardError::from_bits(self.status) {
+            Some(e) => Err(MmcError::Card(e)),
+            None => Ok(()),
+        }
     }
 
     pub fn app_cmd(&self) -> bool {
@@ -596,35 +680,60 @@ pub struct R5 {
     pub data: u8,
 }
 
-impl R5 {
+/// Error bits defined in SDIO Simplified Specification
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SdioError {
     /// COM_CRC_ERROR: the CRC of the command that triggered this was bad.
-    pub const FLAG_COM_CRC_ERROR: u8 = 1 << 7;
+    ComCrcError,
     /// ILLEGAL_COMMAND: command not legal in the current state.
-    pub const FLAG_ILLEGAL_COMMAND: u8 = 1 << 6;
+    IllegalCommand,
     /// General ERROR.
-    pub const FLAG_ERROR: u8 = 1 << 3;
+    Error,
     /// FUNCTION_NUMBER: requested function does not exist on this card.
-    pub const FLAG_FUNCTION_NUMBER: u8 = 1 << 1;
+    FunctionNumber,
     /// OUT_OF_RANGE: register address out of range for this function.
+    OutOfRange,
+}
+
+impl SdioError {
+    pub const FLAG_COM_CRC_ERROR: u8 = 1 << 7;
+    pub const FLAG_ILLEGAL_COMMAND: u8 = 1 << 6;
+    pub const FLAG_ERROR: u8 = 1 << 3;
+    pub const FLAG_FUNCTION_NUMBER: u8 = 1 << 1;
     pub const FLAG_OUT_OF_RANGE: u8 = 1 << 0;
 
-    /// Mask of all bits that indicate a hard error.
-    pub const ERROR_FLAGS: u8 = Self::FLAG_COM_CRC_ERROR
+    pub const ALL: u8 = Self::FLAG_COM_CRC_ERROR
         | Self::FLAG_ILLEGAL_COMMAND
         | Self::FLAG_ERROR
         | Self::FLAG_FUNCTION_NUMBER
         | Self::FLAG_OUT_OF_RANGE;
 
-    pub fn to_result(&self) -> Result<(), MmcError> {
-        if self.is_error() {
-            Err(MmcError::Other)
-        } else {
-            Ok(())
+    pub fn from_bits(bits: u8) -> Option<Self> {
+        let bits = bits & Self::ALL;
+        if bits == 0 {
+            return None;
+        }
+
+        // isolate lowest set bit
+        match bits & (!bits + 1) {
+            Self::FLAG_COM_CRC_ERROR => Some(Self::ComCrcError),
+            Self::FLAG_ILLEGAL_COMMAND => Some(Self::IllegalCommand),
+            Self::FLAG_ERROR => Some(Self::Error),
+            Self::FLAG_FUNCTION_NUMBER => Some(Self::FunctionNumber),
+            Self::FLAG_OUT_OF_RANGE => Some(Self::OutOfRange),
+
+            _ => None, // unknown bit → treat as OK or handle differently
         }
     }
+}
 
-    pub fn is_error(&self) -> bool {
-        self.flags & Self::ERROR_FLAGS != 0
+impl R5 {
+    pub fn to_result(&self) -> Result<(), MmcError> {
+        match SdioError::from_bits(self.flags) {
+            Some(e) => Err(MmcError::Sdio(e)),
+            None => Ok(()),
+        }
     }
 }
 
