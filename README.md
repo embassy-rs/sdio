@@ -88,7 +88,7 @@ pub trait MmcBus {
         &mut self,
         width: BusWidth,
         hz: u32,
-        op: &mut O,
+        op: O,
     ) -> impl Future<Output = Result<(), MmcError>>
     where
         O: TuningOp,
