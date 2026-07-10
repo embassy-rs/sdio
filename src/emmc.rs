@@ -541,7 +541,7 @@ impl Acquirable for Emmc {
         block_size: BlockSize,
         bus_width: BusWidth,
         freq: u32,
-    ) -> Result<Self, MmcError> {
+    ) -> Result<(Self, u32), MmcError> {
         let mut this = Self::default();
 
         if block_size.len() != 512 {
@@ -585,7 +585,7 @@ impl Acquirable for Emmc {
         bus.read_blocks(send_ext_csd(&mut this.ext_csd), false, false)
             .await?;
 
-        Ok(this)
+        Ok((this, freq))
     }
 }
 

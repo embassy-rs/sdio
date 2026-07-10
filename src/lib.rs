@@ -255,7 +255,7 @@ pub trait MmcBus {
         &mut self,
         width: BusWidth,
         hz: u32,
-        op: &mut O,
+        op: O,
     ) -> impl Future<Output = Result<(), MmcError>>
     where
         O: TuningOp,
@@ -340,7 +340,7 @@ impl<T: MmcBus> MmcBus for &mut T {
         T::write_bytes(self, cmd).await
     }
 
-    async fn tune_bus<O>(&mut self, width: BusWidth, hz: u32, op: &mut O) -> Result<(), MmcError>
+    async fn tune_bus<O>(&mut self, width: BusWidth, hz: u32, op: O) -> Result<(), MmcError>
     where
         O: TuningOp,
     {
@@ -980,6 +980,31 @@ pub enum Signalling {
     DDR50,
 }
 
+impl Signalling {
+    #[inline]
+    pub const fn from_freq(freq: u32) -> Self {
+        if freq > 100_000_000 {
+            Self::SDR104
+        } else if freq > 50_000_000 {
+            Self::SDR50
+        } else if freq > 25_000_000 {
+            Self::SDR25
+        } else {
+            Self::SDR12
+        }
+    }
+
+    #[inline]
+    pub const fn to_freq(&self) -> u32 {
+        match *self {
+            Self::SDR12 => 25_000_000,
+            Self::SDR25 | Self::DDR50 => 50_000_000,
+            Self::SDR50 => 100_000_000,
+            Self::SDR104 => 208_000_000,
+        }
+    }
+}
+
 /// Represents either an SD or EMMC card
 trait Acquirable: Sized + Clone + Default {
     // Acquire a storage device from an initialized idle bus
@@ -988,7 +1013,7 @@ trait Acquirable: Sized + Clone + Default {
         block_size: BlockSize,
         bus_width: BusWidth,
         freq: u32,
-    ) -> impl Future<Output = Result<Self, MmcError>>;
+    ) -> impl Future<Output = Result<(Self, u32), MmcError>>;
 }
 
 /// Represents either an SD or EMMC card
@@ -1016,6 +1041,8 @@ pub type DefaultBlockDevice<T, B, D> = BlockDevice<T, B, D, 512>;
 /// Represents a block storage device
 pub struct BlockDevice<T: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize> {
     info: T,
+    freq: u32,
+    error: bool,
     bus: BusAdapter<B, D>,
 }
 
@@ -1035,6 +1062,8 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
     pub fn new_uninit(bus: B, delay: D) -> Self {
         Self {
             info: A::default(),
+            freq: 0,
+            error: false,
             bus: BusAdapter { bus, delay, rca: 0 },
         }
     }
@@ -1046,14 +1075,22 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
         let bus_width = self.bus.bus.supports_bus_width();
 
         self.bus.init_idle().await?;
-        self.info = A::acquire(&mut self.bus, block_size(BLOCK_SIZE), bus_width, freq).await?;
+        (self.info, self.freq) =
+            A::acquire(&mut self.bus, block_size(BLOCK_SIZE), bus_width, freq).await?;
 
         Ok(())
     }
 
     /// Get the card info
-    pub fn card(&self) -> A {
-        self.info.clone()
+    #[inline]
+    pub const fn card(&self) -> &A {
+        &self.info
+    }
+
+    /// Get the card frequency
+    #[inline]
+    pub const fn freq(&self) -> u32 {
+        self.freq
     }
 
     fn get_addr(&self, block_idx: u32) -> u32 {
@@ -1091,17 +1128,25 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
         blocks: &mut [Aligned<A4, [u8; BLOCK_SIZE]>],
     ) -> Result<(), MmcError> {
         let supports_auto_stop = self.bus.bus.supports_auto_stop();
+        let supports_cmd23 = self.info.supports_cmd23();
+
+        if supports_cmd23 {
+            self.bus
+                .send_command(sd::set_block_count(blocks.len() as u32), false)
+                .await?
+                .to_result()?;
+        }
 
         self.bus
             .read_blocks(
                 read_multiple_blocks(self.get_addr(block_idx), blocks),
-                supports_auto_stop,
+                !supports_cmd23 && supports_auto_stop,
                 false,
             )
             .await?
             .to_result()?;
 
-        if !supports_auto_stop {
+        if !supports_cmd23 && !supports_auto_stop {
             self.bus.send_command(stop_transmission(), false).await?;
         }
 
@@ -1184,12 +1229,18 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
     ) -> Result<(), Self::Error> {
         assert_eq!(BLOCK_SIZE % 4, 0);
 
-        // TODO: I think block_address needs to be adjusted by the partition start offset
+        if self.error {
+            self.bus.send_command(stop_transmission(), false).await?;
+        }
+
+        self.error = true;
         if blocks.len() == 1 {
             self.read_block(block_address, &mut blocks[0]).await?;
         } else {
             self.read_blocks(block_address, blocks).await?;
         }
+        self.error = false;
+
         Ok(())
     }
 
@@ -1201,12 +1252,18 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
     ) -> Result<(), Self::Error> {
         assert_eq!(BLOCK_SIZE % 4, 0);
 
-        // TODO: I think block_address needs to be adjusted by the partition start offset
+        if self.error {
+            self.bus.send_command(stop_transmission(), false).await?;
+        }
+
+        self.error = true;
         if blocks.len() == 1 {
             self.write_block(block_address, &blocks[0]).await?;
         } else {
             self.write_blocks(block_address, blocks).await?;
         }
+        self.error = false;
+
         Ok(())
     }
 

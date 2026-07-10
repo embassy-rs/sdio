@@ -201,6 +201,37 @@ impl MmcBus for DummyMmcBus {
                     st.set_busy(2);
                     Ok(DummyMmcBus::make_response([0, 0, 0, 0]))
                 }
+                13 => {
+                    // CMD13 — SEND_STATUS (R1)
+                    //
+                    // SD Physical Spec §4.10.1 — Card Status (32 bits)
+                    //
+                    // Your DummyMmcBus::make_response([u32; 4]) returns an R1-style
+                    // 128-bit response, but only the first word is meaningful for CMD13.
+                    //
+                    // Construct the 32-bit card status based on your dummy state.
+
+                    let mut status: u32 = 0;
+
+                    // READY_FOR_DATA (bit 8)
+                    if st.ready {
+                        status |= 1 << 8;
+                    }
+
+                    // CURRENT_STATE (bits 9–12)
+                    // Map your dummy state into SD states:
+                    // 4 = TRAN, 5 = DATA, 3 = STBY, 2 = IDENT, etc.
+                    let current_state = if st.idle {
+                        0 // IDLE
+                    } else if !st.selected {
+                        3 // STBY
+                    } else {
+                        4 // TRAN
+                    };
+                    status |= current_state << 9;
+
+                    Ok(DummyMmcBus::make_response([status, 0, 0, 0]))
+                }
                 16 => {
                     // CMD16 — SET_BLOCKLEN
                     st.last_set_blocklen = Some(cmd.arg());

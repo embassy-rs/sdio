@@ -1012,8 +1012,8 @@ impl Acquirable for Card {
         bus: &mut BusAdapter<B, D>,
         block_size: BlockSize,
         bus_width: BusWidth,
-        freq: u32,
-    ) -> Result<Self, MmcError> {
+        mut freq: u32,
+    ) -> Result<(Self, u32), MmcError> {
         let mut this = Self::default();
         let mut buf = Aligned([0u8; 64]);
 
@@ -1040,7 +1040,7 @@ impl Acquirable for Card {
             this.ocr = bus.send_command(read_ocr(), false).await?.into();
             bus.bus.set_bus(BusWidth::W1, freq)?;
 
-            return Ok(this);
+            return Ok((this, freq));
         }
 
         // UHS-I voltage switch. Per SD Physical Layer Spec §3.7.5 the
@@ -1088,34 +1088,28 @@ impl Acquirable for Card {
         bus.bus.set_bus(bus_width, freq.min(25_000_000))?;
 
         if freq > 25_000_000 {
-            let request = if freq > 100_000_000 {
-                Signalling::SDR104
-            } else if freq > 50_000_000 {
-                Signalling::SDR50
-            } else {
-                Signalling::SDR25
-            };
+            // Clamp the frequency at the highest frequency that the card supports
+            freq = freq.min(
+                Self::switch_signalling_mode(bus, &mut buf, Signalling::from_freq(freq))
+                    .await?
+                    .to_freq(),
+            );
 
-            if request == Self::switch_signalling_mode(bus, &mut buf, request).await? {
-                // Increase clock to target
-                bus.bus.set_bus(bus_width, freq)?;
+            bus.bus.set_bus(bus_width, freq)?;
 
-                bus.bus
-                    .tune_bus(bus_width, freq, &mut send_tuning_block(0, &mut buf))
-                    .await?;
+            bus.bus
+                .tune_bus(bus_width, freq, send_tuning_block(0, &mut buf))
+                .await?;
+        }
 
-                if CardStatus::<SD>::from(
-                    bus.send_command(common::card_status(bus.rca, false), false)
-                        .await?,
-                )
-                .state()
-                    != CurrentState::Transfer
-                {
-                    return Err(MmcError::Signaling);
-                }
-            } else {
-                return Err(MmcError::Signaling);
-            }
+        if CardStatus::<SD>::from(
+            bus.send_command(common::card_status(bus.rca, false), false)
+                .await?,
+        )
+        .state()
+            != CurrentState::Transfer
+        {
+            return Err(MmcError::Signaling);
         }
 
         // ACMD13 — SD Status (after signalling switch)
@@ -1127,7 +1121,7 @@ impl Acquirable for Card {
             .await?
             .to_result()?;
 
-        Ok(this)
+        Ok((this, freq))
     }
 }
 
