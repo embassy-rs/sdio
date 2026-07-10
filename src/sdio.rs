@@ -491,7 +491,7 @@ impl<B: MmcBus, D: DelayNs> SdioCard<B, D> {
 
             Ok(freq)
         } else {
-            Ok(25_000_000)
+            Ok(freq.min(25_000_000))
         }
     }
 
