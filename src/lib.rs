@@ -916,8 +916,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
     }
 
     /// Send a command that has no data transfer (e.g., CMD0, CMD8, CMD55).
-    ///
-    /// Provide `Some(rca)` to execute this as an app cmd.
     pub async fn send_command<'a, C: ControlCommand + 'a>(
         &mut self,
         cmd: C,
@@ -931,8 +929,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
     }
 
     /// Read N blocks of fixed size (CMD17, CMD18).
-    ///
-    /// Provide `Some(rca)` to execute this as an app cmd.
     ///
     /// Do not call this method for CMD53. Instead, call the underlying bus method.
     pub async fn read_blocks<'a, C: BlockReadCommand + 'a>(
@@ -949,8 +945,6 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
     }
 
     /// Write N blocks of fixed size (CMD24, CMD25).
-    ///
-    /// Provide `Some(rca)` to execute this as an app cmd.
     ///
     /// Do not call this method for CMD53. Instead, call the underlying bus method.
     pub async fn write_blocks<'a, C: BlockWriteCommand + 'a>(
