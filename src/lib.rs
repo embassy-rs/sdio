@@ -78,9 +78,7 @@ impl ResponseLen {
     }
 }
 
-/// ---------------------------------------------------------------------------
 /// Response Trait
-/// ---------------------------------------------------------------------------
 ///
 /// Represents a parsed response from the card.
 /// Each command defines its own associated response type via a GAT.
@@ -106,9 +104,7 @@ pub trait Response: Sized {
     fn from_words(buf: &[u32; 4]) -> Self;
 }
 
-/// ---------------------------------------------------------------------------
 /// Command Trait (with GAT for response type)
-/// ---------------------------------------------------------------------------
 ///
 /// Represents a protocol command (CMD0–CMD63, ACMDs, CMD52/53 for SDIO).
 ///
@@ -183,9 +179,7 @@ pub trait ByteWriteCommand: ByteCommand {
     fn buf(&self) -> &Aligned<A4, [u8]>;
 }
 
-/// ---------------------------------------------------------------------------
 /// MmcBus Trait
-/// ---------------------------------------------------------------------------
 ///
 /// This is the lowest-level hardware abstraction for SD/MMC/SDIO host
 /// controllers. It corresponds to the Linux `mmc_host_ops` interface.
