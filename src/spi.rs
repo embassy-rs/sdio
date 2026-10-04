@@ -132,7 +132,11 @@ impl<SPI, CS, DLY> SpiMmcBus<SPI, CS, DLY> {
         // Skip raw[0]: it holds the R1 status byte, which is not part of the
         // payload. The response parsers expect words to start at the payload.
         let mut words = [0u32; 4];
-        for (i, chunk) in raw[1..1 + total_bytes].chunks(4).take(words.len()).enumerate() {
+        for (i, chunk) in raw[1..1 + total_bytes]
+            .chunks(4)
+            .take(words.len())
+            .enumerate()
+        {
             let mut w = 0u32;
             for &b in chunk {
                 w = (w << 8) | b as u32;
