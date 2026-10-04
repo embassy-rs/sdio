@@ -73,10 +73,10 @@ impl CardState {
     }
 
     fn is_busy(&mut self) -> bool {
-        if let Some(t) = self.busy_until {
-            if Instant::now() < t {
-                return true;
-            }
+        if let Some(t) = self.busy_until
+            && Instant::now() < t
+        {
+            return true;
         }
         self.busy_until = None;
         false
@@ -169,7 +169,7 @@ impl MmcBus for DummyMmcBus {
                     // CMD6 — SWITCH_FUNCTION (SD mode)
                     let arg = cmd.arg();
                     let mode = (arg >> 31) & 1;
-                    let group1 = (arg >> 0) & 0xF;
+                    let group1 = arg & 0xF;
 
                     if mode == 1 {
                         // SWITCH mode
@@ -525,7 +525,7 @@ async fn test_sd_status_parse() {
     assert!(matches!(status.bus_width(), Some(BusWidth::W4)));
 
     // Secure mode: bit 29 of word 15 → 0
-    assert_eq!(status.secure_mode(), false);
+    assert!(!status.secure_mode());
 
     // SD Memory Card Type: low 16 bits of word 15 → 0x0000
     assert_eq!(status.sd_memory_card_type(), 0);
@@ -555,7 +555,7 @@ async fn test_sd_status_parse() {
     assert_eq!(status.app_perf_class(), 0);
 
     // Discard support: bit 25 of word 8 = 0
-    assert_eq!(status.discard_support(), false);
+    assert!(!status.discard_support());
 }
 
 #[tokio::test]

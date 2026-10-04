@@ -129,8 +129,14 @@ impl<SPI, CS, DLY> SpiMmcBus<SPI, CS, DLY> {
             raw[1..=total_bytes].copy_from_slice(&tmp[..total_bytes]);
         }
 
+        // Skip raw[0]: it holds the R1 status byte, which is not part of the
+        // payload. The response parsers expect words to start at the payload.
         let mut words = [0u32; 4];
-        for (i, chunk) in raw[..=total_bytes].chunks(4).take(words.len()).enumerate() {
+        for (i, chunk) in raw[1..1 + total_bytes]
+            .chunks(4)
+            .take(words.len())
+            .enumerate()
+        {
             let mut w = 0u32;
             for &b in chunk {
                 w = (w << 8) | b as u32;
@@ -312,6 +318,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::crc7;
+    use super::*;
+    use crate::sd::{read_ocr, send_if_cond};
+    use core::convert::Infallible;
+    use std::collections::VecDeque;
 
     // Framed command CRC byte sent on the wire = (crc7 << 1) | 1.
     fn framed(bytes: &[u8]) -> u8 {
@@ -324,5 +334,103 @@ mod tests {
         assert_eq!(framed(&[0x40, 0x00, 0x00, 0x00, 0x00]), 0x95); // CMD0
         assert_eq!(framed(&[0x51, 0x00, 0x00, 0x00, 0x00]), 0x55); // CMD17, arg 0
         assert_eq!(framed(&[0x48, 0x00, 0x00, 0x01, 0xAA]), 0x87); // CMD8, arg 0x1AA
+    }
+
+    /// SPI mock that serves `rx` bytes on reads (0xFF once exhausted) and
+    /// records everything written (commands).
+    struct MockSpi {
+        rx: VecDeque<u8>,
+        tx: Vec<u8>,
+    }
+
+    impl embedded_hal::spi::ErrorType for MockSpi {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal_async::spi::SpiBus<u8> for MockSpi {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+            for b in buf.iter_mut() {
+                *b = self.rx.pop_front().unwrap_or(0xFF);
+            }
+            Ok(())
+        }
+
+        async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            self.tx.extend_from_slice(buf);
+            Ok(())
+        }
+
+        async fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+            self.write(write).await?;
+            self.read(read).await
+        }
+
+        async fn transfer_in_place(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+            self.read(buf).await
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl SetHz for MockSpi {
+        fn set_hz(&mut self, _hz: u32) {}
+    }
+
+    struct MockCs;
+
+    impl embedded_hal::digital::ErrorType for MockCs {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal::digital::OutputPin for MockCs {
+        fn set_low(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn set_high(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    struct MockDelay;
+
+    impl DelayNs for MockDelay {
+        async fn delay_ns(&mut self, _ns: u32) {}
+    }
+
+    fn mock_bus(response: &[u8]) -> SpiMmcBus<MockSpi, MockCs, MockDelay> {
+        SpiMmcBus::new(
+            MockSpi {
+                rx: response.iter().copied().collect(),
+                tx: Vec::new(),
+            },
+            MockCs,
+            MockDelay,
+        )
+    }
+
+    #[tokio::test]
+    async fn r7_response_parsing_skips_r1_byte() {
+        // Raw bytes captured in https://github.com/embassy-rs/sdio/issues/30:
+        // R1 = 0x01 (in idle state), then the 32-bit R7 payload
+        // (voltage accepted = 0x1, check pattern = 0xAA), then the CRC byte.
+        // The R1 byte must not be packed into the payload word.
+        let mut bus = mock_bus(&[0x01, 0x00, 0x00, 0x01, 0xAA, 0xFF]);
+
+        let resp = bus.send_command(send_if_cond(1, 0xAA)).await.unwrap();
+
+        assert_eq!(resp.voltage, 1);
+        assert_eq!(resp.check_pattern, 0xAA);
+    }
+
+    #[tokio::test]
+    async fn r3_response_parsing_skips_r1_byte() {
+        // CMD58 (READ_OCR) in SPI mode: R1 = 0x00 (no error), then the 32-bit OCR.
+        let mut bus = mock_bus(&[0x00, 0xC0, 0xFF, 0x80, 0x00, 0xFF]);
+
+        let resp = bus.send_command(read_ocr()).await.unwrap();
+
+        assert_eq!(resp.ocr, 0xC0FF8000);
     }
 }
