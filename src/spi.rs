@@ -1,3 +1,5 @@
+//! Contains an `MmcBus` SPI driver.
+
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::spi::SpiBus;

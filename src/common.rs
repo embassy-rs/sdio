@@ -1,3 +1,5 @@
+//! common SDMMC protocol functionality.
+
 use core::marker::PhantomData;
 use core::{fmt, mem, slice};
 
