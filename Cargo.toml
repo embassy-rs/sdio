@@ -1,6 +1,6 @@
 [package]
 name = "sdio"
-version = "0.5.1"
+version = "0.5.2"
 authors = [
     "Johan Kristell <johan@jott.se>",
     "Richard Meadows <richard@richard.fish>",
