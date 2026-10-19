@@ -52,6 +52,36 @@ pub enum MmcError {
     Other,
 }
 
+impl core::fmt::Display for MmcError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Timeout => "timeout",
+            Self::Crc => "CRC error",
+            Self::Busy => "busy",
+            Self::Io => "hardware I/O error",
+            Self::BlockSize => "invalid block size",
+            Self::Signaling => "signaling switch failed",
+            Self::BusWidth => "unsupported bus width",
+            Self::Voltage => "unsupported voltage",
+            Self::CardType => "unsupported card type",
+            Self::Unsupported => "bus feature is not supported",
+            Self::Card(_) => "card error",
+            Self::Sdio(_) => "SDIO error",
+            Self::Other => "other error",
+        })
+    }
+}
+
+impl core::error::Error for MmcError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Card(e) => Some(e),
+            Self::Sdio(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BusWidth {
@@ -428,6 +458,29 @@ pub enum CardError {
     EraseReset,
 }
 
+impl core::fmt::Display for CardError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AddressError => "address error",
+            Self::BlockLenError => "block length error",
+            Self::EraseSeqError => "erase sequence error",
+            Self::EraseParamError => "erase parameter error",
+            Self::WriteProtViolation => "write protect violation",
+            Self::LockUnlockFailed => "lock/unlock failed",
+            Self::ComCrcError => "command CRC error",
+            Self::IllegalCommand => "illegal command",
+            Self::CardEccFailed => "card ECC failed",
+            Self::CcError => "card controller error",
+            Self::Error => "general error",
+            Self::CidCsdOverwrite => "CID/CSD overwrite",
+            Self::WpEraseSkip => "write protected erase skip",
+            Self::EraseReset => "erase reset",
+        })
+    }
+}
+
+impl core::error::Error for CardError {}
+
 impl CardError {
     pub const ADDRESS_ERROR: u32 = 1 << 31;
     pub const BLOCK_LEN_ERROR: u32 = 1 << 30;
@@ -689,6 +742,20 @@ pub enum SdioError {
     /// OUT_OF_RANGE: register address out of range for this function.
     OutOfRange,
 }
+
+impl core::fmt::Display for SdioError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::ComCrcError => "command CRC error",
+            Self::IllegalCommand => "illegal command",
+            Self::Error => "general error",
+            Self::FunctionNumber => "invalid function number",
+            Self::OutOfRange => "register address out of range",
+        })
+    }
+}
+
+impl core::error::Error for SdioError {}
 
 impl SdioError {
     pub const FLAG_COM_CRC_ERROR: u8 = 1 << 7;
