@@ -934,6 +934,8 @@ impl<B: MmcBus, D: DelayNs> BusAdapter<B, D> {
             self.send_command(common::idle_spi(), false).await?;
         }
 
+        // CMD0 invalidates the previously assigned RCA.
+        self.rca = 0;
         Ok(())
     }
 
