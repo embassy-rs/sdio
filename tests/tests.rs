@@ -26,6 +26,7 @@ pub struct CardState {
     idle: bool,
     ready: bool,
     rca: u16,
+    rca_assigned: bool,
     ocr: u32,
     cid: [u32; 4],
     csd: [u32; 4],
@@ -54,6 +55,7 @@ impl CardState {
             idle: true,
             ready: false,
             rca: 0x1234,
+            rca_assigned: false,
             ocr: 0x40FF8000, // Standard SD OCR
             cid: [0x12345678, 0x9ABCDEF0, 0xCAFEBABE, 0xDEADBEEF],
             csd: [0x400E0032, 0x5B590000, 0xEDCBA987, 0x00000000],
@@ -138,6 +140,7 @@ impl MmcBus for DummyMmcBus {
                     st.idle = true;
                     st.ready = false;
                     st.selected = false;
+                    st.rca_assigned = false;
                     Ok(DummyMmcBus::make_response([0; 4]))
                 }
                 8 => {
@@ -148,6 +151,10 @@ impl MmcBus for DummyMmcBus {
                 }
                 55 => {
                     // CMD55: APP_CMD
+                    let rca = if st.rca_assigned { st.rca } else { 0 };
+                    if cmd.arg() != u32::from(rca) << 16 {
+                        return Err(MmcError::Timeout);
+                    }
                     Ok(DummyMmcBus::make_response([0, 0, 0, 0]))
                 }
                 41 => {
@@ -163,6 +170,7 @@ impl MmcBus for DummyMmcBus {
                 }
                 3 => {
                     // CMD3: SEND_RELATIVE_ADDR
+                    st.rca_assigned = true;
                     Ok(DummyMmcBus::make_response([(st.rca as u32) << 16, 0, 0, 0]))
                 }
                 6 => {
@@ -446,6 +454,15 @@ async fn make_device() -> BlockDevice<Card, DummyMmcBus, NoopDelay, BLOCK_SIZE> 
 async fn test_init() {
     let mut dev = make_device().await;
     assert!(dev.size().await.unwrap() > 0);
+}
+
+#[tokio::test]
+async fn test_reacquire_resets_rca() {
+    let mut dev = make_device().await;
+
+    for _ in 0..2 {
+        dev.reacquire(400_000).await.unwrap();
+    }
 }
 
 #[tokio::test]
