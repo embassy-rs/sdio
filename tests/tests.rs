@@ -232,6 +232,11 @@ impl MmcBus for DummyMmcBus {
 
                     Ok(DummyMmcBus::make_response([status, 0, 0, 0]))
                 }
+                12 => {
+                    // CMD12 — STOP_TRANSMISSION. This card never leaves a transfer open, so
+                    // it is in the transfer state, where a card gives CMD12 no response.
+                    Err(MmcError::Timeout)
+                }
                 16 => {
                     // CMD16 — SET_BLOCKLEN
                     st.last_set_blocklen = Some(cmd.arg());
@@ -586,6 +591,22 @@ async fn test_out_of_bounds_read() {
 // ---------------------------------------------------------------------------
 // Regression tests for upstream parsing/protocol bug fixes
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_reacquire_clears_error_after_failed_read() {
+    let mut dev = make_device().await;
+    let mut block = Aligned([0u8; BLOCK_SIZE]);
+
+    // A failed read leaves no transfer open on this card.
+    dev.read(9999, std::slice::from_mut(&mut block))
+        .await
+        .unwrap_err();
+
+    // Identified afresh, the card has no transfer for a stop to end, so the next read must
+    // not begin with one.
+    dev.reacquire(400_000).await.unwrap();
+    dev.read(0, std::slice::from_mut(&mut block)).await.unwrap();
+}
 
 #[test]
 fn test_rca_from_r6_preserves_address_and_status() {
