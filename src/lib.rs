@@ -1129,6 +1129,8 @@ impl<A: Addressable, B: MmcBus, D: DelayNs, const BLOCK_SIZE: usize>
         let freq = freq.clamp(0, self.bus.bus.supports_frequency());
         let bus_width = self.bus.bus.supports_bus_width();
 
+        // A card identified afresh has no transfer open for a stop to end.
+        self.error = false;
         self.bus.init_idle().await?;
         (self.info, self.freq) =
             A::acquire(&mut self.bus, block_size(BLOCK_SIZE), bus_width, freq).await?;
